@@ -1,2 +1,2 @@
 # HWRTL
-hardware raytracing library for  PVS, hold generation and GI baker.
+hardware raytracing library for PVS, hold generation and GI baker(todo).
