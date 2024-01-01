@@ -33,12 +33,12 @@ namespace pvs
 		Init();
 	}
 
-	EAddMeshInstancesResult AddOccluder(const SOccluderDesc& occluderDesc, const std::vector<SMeshInstanceInfo>& meshInstanceInfo)
+	EAddMeshInstancesResult AddOccluder(const SOccluderDesc& occluderDesc, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices)
 	{
 		return EAddMeshInstancesResult();
 	}
 
-	EAddMeshInstancesResult AddOccluderBound(const SOccluderBound& occluderBound)
+	EAddMeshInstancesResult AddOccluderBound(const SOccluderBound& occluderBound, uint32_t instanceIndex)
 	{
 		SMeshInstanceInfo meshInstanceInfo;
 		std::vector<SMeshInstanceInfo> meshInstanceInfos;
@@ -46,7 +46,7 @@ namespace pvs
 		return AddOccluderBounds(occluderBound, meshInstanceInfos);
 	}
 
-	EAddMeshInstancesResult AddOccluderBounds(const SOccluderBound& occluderBound, const std::vector<SMeshInstanceInfo>& meshInstanceInfo)
+	EAddMeshInstancesResult AddOccluderBounds(const SOccluderBound& occluderBound, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices)
 	{
 		const Vec3 boundMin = occluderBound.m_min;
 		const Vec3 boundMax = occluderBound.m_max;
@@ -122,14 +122,17 @@ namespace pvs
 
 	void AddPlayerCell(SPVSCell pvsCell)
 	{
+
 	}
 
 	void GenerateVisibility()
 	{
+		BuildAccelerationStructure();
 	}
 
-	void GetVisibility()
+	CDynamicBitSet GetVisibility(uint32_t cellIndex)
 	{
+		return CDynamicBitSet();
 	}
 
 	void DestoryPVSGenerator()

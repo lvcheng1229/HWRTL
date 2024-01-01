@@ -36,6 +36,9 @@ SOFTWARE.
 #include <vector>
 #include <stdexcept>
 
+#define ENABLE_THROW_FAILED_RESULT 1
+#define ENABLE_DX12_DEBUG_LAYER 1
+
 #pragma comment(lib,"d3dcompiler.lib")
 #pragma comment(lib,"D3D12.lib")
 #pragma comment(lib,"dxgi.lib")
@@ -48,40 +51,75 @@ _COM_SMARTPTR_TYPEDEF(ID3D12CommandQueue, __uuidof(ID3D12CommandQueue));
 _COM_SMARTPTR_TYPEDEF(ID3D12CommandAllocator, __uuidof(ID3D12CommandAllocator));
 _COM_SMARTPTR_TYPEDEF(ID3D12GraphicsCommandList4, __uuidof(ID3D12GraphicsCommandList4));
 _COM_SMARTPTR_TYPEDEF(ID3D12Resource, __uuidof(ID3D12Resource));
-
-#define ENABLE_THROW_FAILED_RESULT 1 // whether enable HRESULT check
-#define ENABLE_DX12_DEBUG_LAYER 1
+_COM_SMARTPTR_TYPEDEF(ID3D12Fence, __uuidof(ID3D12Fence));
 
 namespace hwrtl
 {
+    struct SDXMeshInstanceInfo
+    {
+        ID3D12ResourcePtr m_pPositionBuffer;
+        ID3D12ResourcePtr m_pIndexBuffer;
+        ID3D12ResourcePtr m_pUVBuffer;
+        ID3D12ResourcePtr m_pNormalBuffer;
 
-//https://github.com/microsoft/DirectX-Graphics-Samples
-/***************************************************************************
-The MIT License (MIT)
+        uint32_t m_nIndexStride = 0;
 
-Copyright (c) 2015 Microsoft
+        uint32_t m_nVertexCount = 0;
+        uint32_t m_nIndexCount = 0;
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+        std::vector<SMeshInstanceInfo>instanes;
+    };
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+    struct SAccelerationStructureBuffers
+    {
+        ID3D12ResourcePtr pScratch;
+        ID3D12ResourcePtr pResult;
+        ID3D12ResourcePtr pInstanceDesc;
+    };
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-***************************************************************************/
+    class CRayTracingDX12
+    {
+    public:
+        ID3D12Device5Ptr m_pDevice;;
+        ID3D12CommandQueuePtr m_pCmdQueue;
+        ID3D12CommandAllocatorPtr m_pCmdAllocator;
+        ID3D12GraphicsCommandList4Ptr m_pCmdList;
+        ID3D12FencePtr m_pFence;
 
-    /* HelperFunction:BEGIN *********************************************************/
-#define SAFE_RELEASE(p) if (p) (p).~_com_ptr_t()
+        HANDLE m_FenceEvent;
+
+        uint64_t m_nFenceValue = 0;;
+
+        std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
+        std::vector<ID3D12ResourcePtr> m_uploadBuffers;
+    };
+
+    static CRayTracingDX12* pRayTracingDX12 = nullptr;
+
+    //https://github.com/microsoft/DirectX-Graphics-Samples
+    /***************************************************************************
+    The MIT License (MIT)
+    
+    Copyright (c) 2015 Microsoft
+    
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+    
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+    
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+    ***************************************************************************/
 
     inline std::string ResultToString(HRESULT hr)
     {
@@ -99,39 +137,37 @@ SOFTWARE.
         }
 #endif
     }
-    /* HelperFunction:END *********************************************************/
+    
+    //https://github.com/NVIDIAGameWorks/DxrTutorials
+    /***************************************************************************
+    # Copyright (c) 2018, NVIDIA CORPORATION. All rights reserved.
+    #
+    # Redistribution and use in source and binary forms, with or without
+    # modification, are permitted provided that the following conditions
+    # are met:
+    #  * Redistributions of source code must retain the above copyright
+    #    notice, this list of conditions and the following disclaimer.
+    #  * Redistributions in binary form must reproduce the above copyright
+    #    notice, this list of conditions and the following disclaimer in the
+    #    documentation and/or other materials provided with the distribution.
+    #  * Neither the name of NVIDIA CORPORATION nor the names of its
+    #    contributors may be used to endorse or promote products derived
+    #    from this software without specific prior written permission.
+    #
+    # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+    # EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    # PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+    # CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+    # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    # PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    # PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+    # OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+    ***************************************************************************/
 
-
-//https://github.com/NVIDIAGameWorks/DxrTutorials
-/***************************************************************************
-# Copyright (c) 2018, NVIDIA CORPORATION. All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#  * Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-#  * Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-#  * Neither the name of NVIDIA CORPORATION nor the names of its
-#    contributors may be used to endorse or promote products derived
-#    from this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-# PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-# OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-***************************************************************************/
-
-    /* InitDXR:BEGIN *********************************************************/
+    // init dxr
     ID3D12Device5Ptr CreateDevice(IDXGIFactory4Ptr pDxgiFactory)
     {
         IDXGIAdapter1Ptr pAdapter;
@@ -177,15 +213,54 @@ SOFTWARE.
         ThrowIfFailed(pDevice->CreateCommandQueue(&cqDesc, IID_PPV_ARGS(&pQueue)));
         return pQueue;
     }
-    /* InitDXR:END *********************************************************/
+
+    void SubmitCommandList()
+    {
+        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
+        ID3D12CommandQueuePtr pCmdQueue = pRayTracingDX12->m_pCmdQueue;
+        ID3D12CommandAllocatorPtr pCmdAllocator = pRayTracingDX12->m_pCmdAllocator;
+        ID3D12FencePtr pFence = pRayTracingDX12->m_pFence;
+        
+        uint64_t& nfenceValue = pRayTracingDX12->m_nFenceValue;
+        HANDLE& fenceEvent = pRayTracingDX12->m_FenceEvent;
+
+        pCmdList->Close();
+        ID3D12CommandList* pGraphicsList = pCmdList.GetInterfacePtr();
+        pCmdQueue->ExecuteCommandLists(1, &pGraphicsList);
+        nfenceValue++;
+        pCmdQueue->Signal(pFence, nfenceValue);
+        pFence->SetEventOnCompletion(nfenceValue, fenceEvent);
+        WaitForSingleObject(fenceEvent, INFINITE);
+        pCmdList->Reset(pCmdAllocator, nullptr);
+    }
+
+	void Init()
+	{
+        pRayTracingDX12 = new CRayTracingDX12();
+
+		IDXGIFactory4Ptr pDxgiFactory;
+        ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&pDxgiFactory)));
+        
+        pRayTracingDX12->m_pDevice = CreateDevice(pDxgiFactory);
+        pRayTracingDX12->m_pCmdQueue = CreateCommandQueue(pRayTracingDX12->m_pDevice);
+
+        ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pRayTracingDX12->m_pCmdAllocator)));
+        ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pRayTracingDX12->m_pCmdAllocator, nullptr, IID_PPV_ARGS(&pRayTracingDX12->m_pCmdList)));
+
+        ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pRayTracingDX12->m_pFence)));
+        pRayTracingDX12->m_FenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+	}
 
     //https://github.com/d3dcoder/d3d12book
-    /* ResourceCreate:BEGIN *********************************************************/
     static CD3DX12_HEAP_PROPERTIES defaultHeapProperies(D3D12_HEAP_TYPE_DEFAULT);
     static CD3DX12_HEAP_PROPERTIES uploadHeapProperies(D3D12_HEAP_TYPE_UPLOAD);
 
-    ID3D12ResourcePtr CreateDefaultBuffer(ID3D12Device5Ptr pDevice, ID3D12GraphicsCommandList4Ptr pCmdList, const void* pInitData, UINT64 nByteSize, ID3D12ResourcePtr& pUploadBuffer)
+    ID3D12ResourcePtr CreateDefaultBuffer(const void* pInitData, UINT64 nByteSize, ID3D12ResourcePtr& pUploadBuffer)
     {
+        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
+
         ID3D12ResourcePtr defaultBuffer;
 
         CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(nByteSize);
@@ -207,8 +282,10 @@ SOFTWARE.
         return defaultBuffer;
     }
 
-    ID3D12ResourcePtr CreateBuffer(ID3D12Device5Ptr pDevice, uint64_t size, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES initState, const D3D12_HEAP_PROPERTIES& heapProps)
+    ID3D12ResourcePtr CreateBuffer(uint64_t size, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES initState, const D3D12_HEAP_PROPERTIES& heapProps)
     {
+        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+
         D3D12_RESOURCE_DESC bufDesc = {};
         bufDesc.Alignment = 0;
         bufDesc.DepthOrArraySize = 1;
@@ -226,44 +303,8 @@ SOFTWARE.
         ThrowIfFailed(pDevice->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc, initState, nullptr, IID_PPV_ARGS(&pBuffer)));
         return pBuffer;
     }
-    /* ResourceCreate:END *********************************************************/
 
-
-    class CRayTracingDX12
-    {
-    public:
-        ID3D12Device5Ptr m_pDevice;;
-        ID3D12CommandQueuePtr m_pCmdQueue;
-        ID3D12CommandAllocatorPtr m_pCmdAllocator;
-        ID3D12GraphicsCommandList4Ptr m_pCmdList;
-
-        std::vector<ID3D12ResourcePtr> m_positionBuffers;
-        std::vector<ID3D12ResourcePtr> m_indexBuffers;
-        std::vector<ID3D12ResourcePtr> m_uvBuffers;
-        std::vector<ID3D12ResourcePtr> m_normalBuffers;
-
-        std::vector<ID3D12ResourcePtr> m_uploadBuffers;
-    };
-
-    static CRayTracingDX12* pRayTracingDX12 = nullptr;
-
-	void Init()
-	{
-        pRayTracingDX12 = new CRayTracingDX12();
-
-		IDXGIFactory4Ptr pDxgiFactory;
-        ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&pDxgiFactory)));
-        
-        pRayTracingDX12->m_pDevice = CreateDevice(pDxgiFactory);
-        pRayTracingDX12->m_pCmdQueue = CreateCommandQueue(pRayTracingDX12->m_pDevice);
-
-        ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pRayTracingDX12->m_pCmdAllocator)));
-        ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pRayTracingDX12->m_pCmdAllocator, nullptr, IID_PPV_ARGS(&pRayTracingDX12->m_pCmdList)));
-
-        //todo:fence
-	}
-
-    EAddMeshInstancesResult hwrtl::AddMeshInstances(const SMeshInstancesDesc& meshInstancesDesc)
+    EAddMeshInstancesResult AddMeshInstances(const SMeshInstancesDesc& meshInstancesDesc)
     {
         const uint32_t nVertexCount = meshInstancesDesc.m_nVertexCount;
         const uint32_t nIndexCount = meshInstancesDesc.m_nIndexCount;
@@ -289,11 +330,136 @@ SOFTWARE.
             return EAddMeshInstancesResult::INVALID_INSTANCE_INFO_NUM;
         }
 
+        SDXMeshInstanceInfo dxMeshInstanceInfo;
+        dxMeshInstanceInfo.m_nIndexStride = meshInstancesDesc.m_nIndexStride;
+        dxMeshInstanceInfo.m_nVertexCount = meshInstancesDesc.m_nVertexCount;
+        dxMeshInstanceInfo.m_nIndexCount = meshInstancesDesc.m_nIndexCount;
+        dxMeshInstanceInfo.instanes = meshInstancesDesc.instanes;
+
         // create vertex buffer
         pRayTracingDX12->m_uploadBuffers.push_back(ID3D12ResourcePtr());
-        ID3D12ResourcePtr vertexBuffer = CreateDefaultBuffer(pRayTracingDX12->m_pDevice, pRayTracingDX12->m_pCmdList, meshInstancesDesc.m_pPositionData, nVertexCount * sizeof(Vec3), pRayTracingDX12->m_uploadBuffers.back());
-        pRayTracingDX12->m_positionBuffers.push_back(vertexBuffer);
+        dxMeshInstanceInfo.m_pPositionBuffer = CreateDefaultBuffer(meshInstancesDesc.m_pPositionData, nVertexCount * sizeof(Vec3), pRayTracingDX12->m_uploadBuffers.back());
+    }
 
+    // build bottom level acceleration structure
+    SAccelerationStructureBuffers BuildBottomLevelAccelerationStructure()
+    {
+        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
+
+        const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pRayTracingDX12->m_dxMeshInstanceInfos;
+        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geomDesc;
+        geomDesc.resize(dxMeshInstanceInfos.size());
+
+        for (uint32_t i = 0; i < dxMeshInstanceInfos.size(); i++)
+        {
+            const SDXMeshInstanceInfo& dxMeshInstanceInfo = dxMeshInstanceInfos[i];
+            geomDesc[i].Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+            geomDesc[i].Triangles.VertexBuffer.StartAddress = dxMeshInstanceInfo.m_pPositionBuffer->GetGPUVirtualAddress();
+            geomDesc[i].Triangles.VertexBuffer.StrideInBytes = sizeof(Vec3);
+            geomDesc[i].Triangles.VertexCount = dxMeshInstanceInfo.m_nVertexCount;
+            geomDesc[i].Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+            geomDesc[i].Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+        }
+
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
+        inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+        inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE;
+        inputs.NumDescs = dxMeshInstanceInfos.size();
+        inputs.pGeometryDescs = geomDesc.data();
+        inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info;
+        pDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
+
+        ID3D12ResourcePtr pScratch = CreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
+        ID3D12ResourcePtr pResult = CreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
+
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
+        asDesc.Inputs = inputs;
+        asDesc.DestAccelerationStructureData = pResult->GetGPUVirtualAddress();
+        asDesc.ScratchAccelerationStructureData = pScratch->GetGPUVirtualAddress();
+
+        pCmdList->BuildRaytracingAccelerationStructure(&asDesc, 0, nullptr);
+
+        D3D12_RESOURCE_BARRIER uavBarrier = {};
+        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        uavBarrier.UAV.pResource = pResult;
+        pCmdList->ResourceBarrier(1, &uavBarrier);
+
+        SAccelerationStructureBuffers resultBuffers;
+        resultBuffers.pResult = pResult;
+        resultBuffers.pScratch = pScratch;
+        return resultBuffers;
+    }
+
+    SAccelerationStructureBuffers BuildTopLevelAccelerationStructure(ID3D12ResourcePtr pBottomLevelAS)
+    {
+        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
+
+        uint32_t totalInstanceNum;
+        const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pRayTracingDX12->m_dxMeshInstanceInfos;
+        for (uint32_t i = 0; i < dxMeshInstanceInfos.size(); i++)
+        {
+            totalInstanceNum += dxMeshInstanceInfos[i].instanes.size();
+        }
+
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
+        inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+        inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE;
+        inputs.NumDescs = totalInstanceNum;
+        inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info;
+        pDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
+
+        ID3D12ResourcePtr pScratch = CreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
+        ID3D12ResourcePtr pResult = CreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
+
+        ID3D12ResourcePtr pInstanceDescBuffer = CreateBuffer(sizeof(D3D12_RAYTRACING_INSTANCE_DESC), D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, uploadHeapProperies);
+        //D3D12_RAYTRACING_INSTANCE_DESC* pInstanceDesc;
+        //pInstanceDescBuffer->Map(0, nullptr, (void**)&pInstanceDesc);
+        //
+        //pInstanceDesc->InstanceID = 0;                            // This value will be exposed to the shader via InstanceID()
+        //pInstanceDesc->InstanceContributionToHitGroupIndex = 0;   // This is the offset inside the shader-table. We only have a single geometry, so the offset 0
+        //pInstanceDesc->Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+        //memcpy(pInstanceDesc->Transform, &m, sizeof(pInstanceDesc->Transform));
+        //pInstanceDesc->AccelerationStructure = pBottomLevelAS->GetGPUVirtualAddress();
+        //pInstanceDesc->InstanceMask = 0xFF;
+
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
+        asDesc.Inputs = inputs;
+        asDesc.Inputs.InstanceDescs = pInstanceDescBuffer->GetGPUVirtualAddress();
+        asDesc.DestAccelerationStructureData = pResult->GetGPUVirtualAddress();
+        asDesc.ScratchAccelerationStructureData = pScratch->GetGPUVirtualAddress();
+
+        pCmdList->BuildRaytracingAccelerationStructure(&asDesc, 0, nullptr);
+
+        D3D12_RESOURCE_BARRIER uavBarrier = {};
+        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        uavBarrier.UAV.pResource = pResult;
+        pCmdList->ResourceBarrier(1, &uavBarrier);
+
+        SAccelerationStructureBuffers resultBuffers;
+        resultBuffers.pResult = pResult;
+        resultBuffers.pScratch = pScratch;
+        resultBuffers.pInstanceDesc = pInstanceDescBuffer;
+        return resultBuffers;
+    }
+
+
+    void BuildAccelerationStructure()
+    {
+        SAccelerationStructureBuffers bottomLevelBuffers = BuildBottomLevelAccelerationStructure();
+        SAccelerationStructureBuffers topLevelBuffers = BuildTopLevelAccelerationStructure(bottomLevelBuffers.pResult);
+        SubmitCommandList();
+        pRayTracingDX12->m_uploadBuffers.clear();
+  
+    }
+
+    void hwrtl::DestroyScene()
+    {
 
     }
 

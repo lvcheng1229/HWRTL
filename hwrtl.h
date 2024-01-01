@@ -125,6 +125,8 @@ namespace hwrtl
 
 	void Init();
 	EAddMeshInstancesResult AddMeshInstances(const SMeshInstancesDesc& meshInstancesDesc);
+	void BuildAccelerationStructure();
+	void DestroyScene();
 	void Shutdown();
 }
 
