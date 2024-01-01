@@ -28,6 +28,5 @@ namespace hwrtl
 {
 namespace gi
 {
-	
 }
 }
