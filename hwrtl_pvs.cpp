@@ -42,8 +42,11 @@ namespace pvs
 	{
 		SMeshInstanceInfo meshInstanceInfo;
 		std::vector<SMeshInstanceInfo> meshInstanceInfos;
+		std::vector<uint32_t>instanceIndices;
+
 		meshInstanceInfos.push_back(meshInstanceInfo);
-		return AddOccluderBounds(occluderBound, meshInstanceInfos);
+		instanceIndices.push_back(instanceIndex);
+		return AddOccluderBounds(occluderBound, meshInstanceInfos, instanceIndices);
 	}
 
 	EAddMeshInstancesResult AddOccluderBounds(const SOccluderBound& occluderBound, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices)

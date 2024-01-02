@@ -52,50 +52,10 @@ _COM_SMARTPTR_TYPEDEF(ID3D12CommandAllocator, __uuidof(ID3D12CommandAllocator));
 _COM_SMARTPTR_TYPEDEF(ID3D12GraphicsCommandList4, __uuidof(ID3D12GraphicsCommandList4));
 _COM_SMARTPTR_TYPEDEF(ID3D12Resource, __uuidof(ID3D12Resource));
 _COM_SMARTPTR_TYPEDEF(ID3D12Fence, __uuidof(ID3D12Fence));
+_COM_SMARTPTR_TYPEDEF(IDxcCompiler3, __uuidof(IDxcCompiler3));
 
 namespace hwrtl
 {
-    struct SDXMeshInstanceInfo
-    {
-        ID3D12ResourcePtr m_pPositionBuffer;
-        ID3D12ResourcePtr m_pIndexBuffer;
-        ID3D12ResourcePtr m_pUVBuffer;
-        ID3D12ResourcePtr m_pNormalBuffer;
-
-        uint32_t m_nIndexStride = 0;
-
-        uint32_t m_nVertexCount = 0;
-        uint32_t m_nIndexCount = 0;
-
-        std::vector<SMeshInstanceInfo>instanes;
-    };
-
-    struct SAccelerationStructureBuffers
-    {
-        ID3D12ResourcePtr pScratch;
-        ID3D12ResourcePtr pResult;
-        ID3D12ResourcePtr pInstanceDesc;
-    };
-
-    class CRayTracingDX12
-    {
-    public:
-        ID3D12Device5Ptr m_pDevice;;
-        ID3D12CommandQueuePtr m_pCmdQueue;
-        ID3D12CommandAllocatorPtr m_pCmdAllocator;
-        ID3D12GraphicsCommandList4Ptr m_pCmdList;
-        ID3D12FencePtr m_pFence;
-
-        HANDLE m_FenceEvent;
-
-        uint64_t m_nFenceValue = 0;;
-
-        std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
-        std::vector<ID3D12ResourcePtr> m_uploadBuffers;
-    };
-
-    static CRayTracingDX12* pRayTracingDX12 = nullptr;
-
     //https://github.com/microsoft/DirectX-Graphics-Samples
     /***************************************************************************
     The MIT License (MIT)
@@ -138,6 +98,80 @@ namespace hwrtl
 #endif
     }
     
+    struct SDXMeshInstanceInfo
+    {
+        ID3D12ResourcePtr m_pPositionBuffer;
+        ID3D12ResourcePtr m_pIndexBuffer;
+        ID3D12ResourcePtr m_pUVBuffer;
+        ID3D12ResourcePtr m_pNormalBuffer;
+
+        uint32_t m_nIndexStride = 0;
+
+        uint32_t m_nVertexCount = 0;
+        uint32_t m_nIndexCount = 0;
+
+        std::vector<SMeshInstanceInfo>instanes;
+    };
+
+    struct SAccelerationStructureBuffers
+    {
+        ID3D12ResourcePtr pScratch;
+        ID3D12ResourcePtr pResult;
+        ID3D12ResourcePtr pInstanceDesc;
+    };
+
+    class CRayTracingDX12
+    {
+    public:
+        ID3D12Device5Ptr m_pDevice;;
+        ID3D12CommandQueuePtr m_pCmdQueue;
+        ID3D12CommandAllocatorPtr m_pCmdAllocator;
+        ID3D12GraphicsCommandList4Ptr m_pCmdList;
+        ID3D12FencePtr m_pFence;
+        IDxcCompiler3Ptr m_pDxcCompiler;
+
+        HANDLE m_FenceEvent;
+
+        uint64_t m_nFenceValue = 0;;
+
+        std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
+        std::vector<ID3D12ResourcePtr> m_uploadBuffers;
+
+        void InitDxc();
+
+        ID3D12ResourcePtr& AllocUploadBuffer()
+        {
+            m_uploadBuffers.push_back(ID3D12ResourcePtr());
+            return m_uploadBuffers.back();
+        }
+
+    private:
+        HMODULE m_dxcDll;
+        DxcCreateInstanceProc m_createFn;
+    };
+
+    void hwrtl::CRayTracingDX12::InitDxc()
+    {
+        m_dxcDll = LoadLibraryW(L"dxcompiler.dll");
+        if (m_dxcDll == nullptr)
+        {
+            ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
+        }
+        else
+        {
+            m_createFn = (DxcCreateInstanceProc)GetProcAddress(m_dxcDll, "DxcCreateInstance");
+
+            if (m_createFn == nullptr) {
+                ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
+                FreeLibrary(m_dxcDll);
+                m_dxcDll = nullptr;
+            }
+
+            ThrowIfFailed(m_createFn(CLSID_DxcCompiler, IID_PPV_ARGS(&m_pDxcCompiler)));
+        }
+    }
+    static CRayTracingDX12* pRayTracingDX12 = nullptr;
+
     //https://github.com/NVIDIAGameWorks/DxrTutorials
     /***************************************************************************
     # Copyright (c) 2018, NVIDIA CORPORATION. All rights reserved.
@@ -250,6 +284,8 @@ namespace hwrtl
 
         ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pRayTracingDX12->m_pFence)));
         pRayTracingDX12->m_FenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+
+        pRayTracingDX12->InitDxc();
 	}
 
     //https://github.com/d3dcoder/d3d12book
@@ -337,8 +373,8 @@ namespace hwrtl
         dxMeshInstanceInfo.instanes = meshInstancesDesc.instanes;
 
         // create vertex buffer
-        pRayTracingDX12->m_uploadBuffers.push_back(ID3D12ResourcePtr());
-        dxMeshInstanceInfo.m_pPositionBuffer = CreateDefaultBuffer(meshInstancesDesc.m_pPositionData, nVertexCount * sizeof(Vec3), pRayTracingDX12->m_uploadBuffers.back());
+        dxMeshInstanceInfo.m_pPositionBuffer = CreateDefaultBuffer(meshInstancesDesc.m_pPositionData, nVertexCount * sizeof(Vec3), pRayTracingDX12->AllocUploadBuffer());
+        pRayTracingDX12->m_dxMeshInstanceInfos.push_back(dxMeshInstanceInfo);
     }
 
     // build bottom level acceleration structure
@@ -364,7 +400,7 @@ namespace hwrtl
 
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
         inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-        inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE;
+        inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
         inputs.NumDescs = dxMeshInstanceInfos.size();
         inputs.pGeometryDescs = geomDesc.data();
         inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
@@ -393,12 +429,25 @@ namespace hwrtl
         return resultBuffers;
     }
 
+    D3D12_RAYTRACING_INSTANCE_FLAGS ConvertToDXInstanceFlag(EInstanceFlag instanceFlag)
+    {
+        switch (instanceFlag)
+        {
+        case EInstanceFlag::CULL_DISABLE:
+            return D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+        case EInstanceFlag::FRONTFACE_CCW:
+            return D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
+        default:
+            return D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+        }
+    }
+
     SAccelerationStructureBuffers BuildTopLevelAccelerationStructure(ID3D12ResourcePtr pBottomLevelAS)
     {
         ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
         ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
 
-        uint32_t totalInstanceNum;
+        uint32_t totalInstanceNum = 0;
         const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pRayTracingDX12->m_dxMeshInstanceInfos;
         for (uint32_t i = 0; i < dxMeshInstanceInfos.size(); i++)
         {
@@ -407,7 +456,7 @@ namespace hwrtl
 
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
         inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-        inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE;
+        inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
         inputs.NumDescs = totalInstanceNum;
         inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
 
@@ -417,16 +466,23 @@ namespace hwrtl
         ID3D12ResourcePtr pScratch = CreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
         ID3D12ResourcePtr pResult = CreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
 
-        ID3D12ResourcePtr pInstanceDescBuffer = CreateBuffer(sizeof(D3D12_RAYTRACING_INSTANCE_DESC), D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, uploadHeapProperies);
-        //D3D12_RAYTRACING_INSTANCE_DESC* pInstanceDesc;
-        //pInstanceDescBuffer->Map(0, nullptr, (void**)&pInstanceDesc);
-        //
-        //pInstanceDesc->InstanceID = 0;                            // This value will be exposed to the shader via InstanceID()
-        //pInstanceDesc->InstanceContributionToHitGroupIndex = 0;   // This is the offset inside the shader-table. We only have a single geometry, so the offset 0
-        //pInstanceDesc->Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
-        //memcpy(pInstanceDesc->Transform, &m, sizeof(pInstanceDesc->Transform));
-        //pInstanceDesc->AccelerationStructure = pBottomLevelAS->GetGPUVirtualAddress();
-        //pInstanceDesc->InstanceMask = 0xFF;
+        std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
+        instanceDescs.resize(totalInstanceNum);
+        for (uint32_t indexMesh = 0; indexMesh < dxMeshInstanceInfos.size(); indexMesh++)
+        {
+            for (uint32_t indexInstance = 0; indexInstance < dxMeshInstanceInfos[indexMesh].instanes.size(); indexInstance++)
+            {
+                const SMeshInstanceInfo& meshInstanceInfo = dxMeshInstanceInfos[indexMesh].instanes[indexInstance];
+                instanceDescs[indexMesh].InstanceID = 0;                            // This value will be exposed to the shader via InstanceID()
+                instanceDescs[indexMesh].InstanceContributionToHitGroupIndex = 0;   // This is the offset inside the shader-table. We only have a single geometry, so the offset 0
+                instanceDescs[indexMesh].Flags = ConvertToDXInstanceFlag(meshInstanceInfo.m_instanceFlag);
+                memcpy(instanceDescs[indexMesh].Transform, &meshInstanceInfo.m_transform, sizeof(instanceDescs[indexMesh].Transform));
+                instanceDescs[indexMesh].AccelerationStructure = pBottomLevelAS->GetGPUVirtualAddress();
+                instanceDescs[indexMesh].InstanceMask = 0xFF;
+            }
+        }
+
+        ID3D12ResourcePtr pInstanceDescBuffer = CreateDefaultBuffer(instanceDescs.data(), sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * totalInstanceNum, pRayTracingDX12->AllocUploadBuffer());
 
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
         asDesc.Inputs = inputs;
