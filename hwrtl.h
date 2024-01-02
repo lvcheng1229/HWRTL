@@ -25,9 +25,13 @@ SOFTWARE.
 #pragma once
 #ifndef HWRTL_H
 #define HWRTL_H
+
 #include <stddef.h>
 #include <stdint.h>
 #include <vector>
+#include <fstream>
+#include <sstream>
+
 #define USE_DX12_WIN 1
 
 namespace hwrtl
@@ -126,6 +130,10 @@ namespace hwrtl
 	void Init();
 	EAddMeshInstancesResult AddMeshInstances(const SMeshInstancesDesc& meshInstancesDesc);
 	void BuildAccelerationStructure();
+	void CreateRTPipelineState(const std::wstring filename, const std::wstring targetString, 
+		const std::vector<std::wstring>& anyHitEntryPoints,
+		const std::vector<std::wstring>& clsHitEntryPoints,
+		const std::vector<std::wstring>& entryPoints);
 	void DestroyScene();
 	void Shutdown();
 }

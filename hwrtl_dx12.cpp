@@ -33,6 +33,9 @@ SOFTWARE.
 
 #include <Windows.h>
 
+#include <locale>
+#include <codecvt>
+
 #include <vector>
 #include <stdexcept>
 
@@ -52,7 +55,13 @@ _COM_SMARTPTR_TYPEDEF(ID3D12CommandAllocator, __uuidof(ID3D12CommandAllocator));
 _COM_SMARTPTR_TYPEDEF(ID3D12GraphicsCommandList4, __uuidof(ID3D12GraphicsCommandList4));
 _COM_SMARTPTR_TYPEDEF(ID3D12Resource, __uuidof(ID3D12Resource));
 _COM_SMARTPTR_TYPEDEF(ID3D12Fence, __uuidof(ID3D12Fence));
-_COM_SMARTPTR_TYPEDEF(IDxcCompiler3, __uuidof(IDxcCompiler3));
+_COM_SMARTPTR_TYPEDEF(IDxcBlobEncoding, __uuidof(IDxcBlobEncoding));
+_COM_SMARTPTR_TYPEDEF(IDxcCompiler, __uuidof(IDxcCompiler));
+_COM_SMARTPTR_TYPEDEF(IDxcLibrary, __uuidof(IDxcLibrary));
+_COM_SMARTPTR_TYPEDEF(IDxcOperationResult, __uuidof(IDxcOperationResult));
+_COM_SMARTPTR_TYPEDEF(IDxcBlob, __uuidof(IDxcBlob));
+_COM_SMARTPTR_TYPEDEF(ID3DBlob, __uuidof(ID3DBlob));
+_COM_SMARTPTR_TYPEDEF(ID3D12StateObject, __uuidof(ID3D12StateObject));
 
 namespace hwrtl
 {
@@ -128,12 +137,14 @@ namespace hwrtl
         ID3D12CommandAllocatorPtr m_pCmdAllocator;
         ID3D12GraphicsCommandList4Ptr m_pCmdList;
         ID3D12FencePtr m_pFence;
-        IDxcCompiler3Ptr m_pDxcCompiler;
+        IDxcCompilerPtr m_pDxcCompiler;
+        IDxcLibraryPtr m_pLibrary;
 
         HANDLE m_FenceEvent;
 
         uint64_t m_nFenceValue = 0;;
 
+        ID3D12StateObjectPtr m_pRtPipelineState;
         std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
         std::vector<ID3D12ResourcePtr> m_uploadBuffers;
 
@@ -168,6 +179,7 @@ namespace hwrtl
             }
 
             ThrowIfFailed(m_createFn(CLSID_DxcCompiler, IID_PPV_ARGS(&m_pDxcCompiler)));
+            ThrowIfFailed(m_createFn(CLSID_DxcLibrary, IID_PPV_ARGS(&m_pLibrary)));
         }
     }
     static CRayTracingDX12* pRayTracingDX12 = nullptr;
@@ -200,6 +212,20 @@ namespace hwrtl
     # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
     # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     ***************************************************************************/
+
+    std::wstring string_2_wstring(const std::string& str)
+    {
+        std::wstring_convert<std::codecvt_utf8<WCHAR>> cvt;
+        std::wstring ws = cvt.from_bytes(str);
+        return ws;
+    }
+
+    std::string wstring_2_string(const std::wstring& wstr)
+    {
+        std::wstring_convert<std::codecvt_utf8<wchar_t>> cvt;
+        std::string s = cvt.to_bytes(wstr);
+        return s;
+    }
 
     // init dxr
     ID3D12Device5Ptr CreateDevice(IDXGIFactory4Ptr pDxgiFactory)
@@ -514,7 +540,127 @@ namespace hwrtl
   
     }
 
-    void hwrtl::DestroyScene()
+    IDxcBlobPtr CompileLibrary(const std::wstring& filename)
+    {
+        static const std::wstring currentPath(string_2_wstring(__FILE__));
+        std::size_t dirPos = currentPath.find(L"hwrtl_dx12.cpp");
+
+        std::wstring shaderPath = currentPath.substr(0, dirPos) + filename;
+        std::ifstream shaderFile(shaderPath);
+
+        if (shaderFile.good() == false)
+        {
+            ThrowIfFailed(-1); // invalid shader path
+        }
+
+        std::stringstream strStream;
+        strStream << shaderFile.rdbuf();
+        std::string shader = strStream.str();
+
+        IDxcBlobEncodingPtr pTextBlob;
+        ThrowIfFailed(pRayTracingDX12->m_pLibrary->CreateBlobWithEncodingFromPinned((LPBYTE)shader.c_str(), (uint32_t)shader.size(), 0, &pTextBlob));
+
+        IDxcOperationResultPtr pResult;
+        ThrowIfFailed(pRayTracingDX12->m_pDxcCompiler->Compile(pTextBlob, shaderPath.data(), L"", L"lib_6_3", nullptr, 0, nullptr, 0, nullptr, &pResult));
+
+        HRESULT resultCode;
+        ThrowIfFailed(pResult->GetStatus(&resultCode));
+        if (FAILED(resultCode))
+        {
+            IDxcBlobEncodingPtr pError;
+            ThrowIfFailed(pResult->GetErrorBuffer(&pError));
+        }
+
+        IDxcBlobPtr pBlob;
+        ThrowIfFailed(pResult->GetResult(&pBlob));
+        return pBlob;
+    }
+
+    struct SDxilLibrary
+    {
+        SDxilLibrary(ID3DBlobPtr pBlob, const std::vector<std::wstring>& entryPoint, uint32_t entryPointCount) : m_pShaderBlob(pBlob)
+        {
+            m_stateSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
+            m_stateSubobject.pDesc = &m_dxilLibDesc;
+
+            m_dxilLibDesc = {};
+            m_exportDesc.resize(entryPointCount);
+            m_exportName.resize(entryPointCount);
+            if (pBlob)
+            {
+                m_dxilLibDesc.DXILLibrary.pShaderBytecode = pBlob->GetBufferPointer();
+                m_dxilLibDesc.DXILLibrary.BytecodeLength = pBlob->GetBufferSize();
+                m_dxilLibDesc.NumExports = entryPointCount;
+                m_dxilLibDesc.pExports = m_exportDesc.data();
+
+                for (uint32_t i = 0; i < entryPointCount; i++)
+                {
+                    m_exportName[i] = entryPoint[i];
+                    m_exportDesc[i].Name = m_exportName[i].c_str();
+                    m_exportDesc[i].Flags = D3D12_EXPORT_FLAG_NONE;
+                    m_exportDesc[i].ExportToRename = nullptr;
+                }
+            }
+        };
+
+        D3D12_STATE_SUBOBJECT m_stateSubobject{};
+    private:
+        D3D12_DXIL_LIBRARY_DESC m_dxilLibDesc = {};
+        ID3DBlobPtr m_pShaderBlob;
+        std::vector<std::wstring> m_exportName;
+        std::vector<D3D12_EXPORT_DESC> m_exportDesc;
+    };
+
+    static const WCHAR* hitGroupName = L"HitGroup";
+    
+    D3D12_STATE_SUBOBJECT CreateDXILSubObject()
+    {
+
+    }
+
+    D3D12_STATE_SUBOBJECT CreateHitGroupSubObject(LPCWSTR ahsExport, LPCWSTR chsExport)
+    {
+        D3D12_HIT_GROUP_DESC hitGroupDesc = {};
+        hitGroupDesc.AnyHitShaderImport = ahsExport;
+        hitGroupDesc.ClosestHitShaderImport = chsExport;
+        hitGroupDesc.HitGroupExport = hitGroupName;
+
+        D3D12_STATE_SUBOBJECT hitGroupSubObject;
+        hitGroupSubObject.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+        hitGroupSubObject.pDesc = &hitGroupDesc;
+        return hitGroupSubObject;
+    }
+
+    void CreateRTPipelineState(const std::wstring filename, 
+        const std::vector<std::wstring>& anyHitEntryPoints,
+        const std::vector<std::wstring>& clsHitEntryPoints, 
+        const std::vector<std::wstring>& entryPoints)
+    {
+
+        std::vector<D3D12_STATE_SUBOBJECT> stateSubObjects;
+
+        //toto combine 3 entry points
+        ID3DBlobPtr pDxilLib = CompileLibrary(filename);
+        SDxilLibrary dxilLibrary(pDxilLib, entryPoints, entryPoints.size());
+
+        for (uint32_t indexAH = 0; indexAH < anyHitEntryPoints.size(); indexAH++)
+        {
+            stateSubObjects.push_back(CreateHitGroupSubObject(anyHitEntryPoints[indexAH].data(), nullptr));
+        }
+        
+        for (uint32_t indexCH = 0; indexCH < clsHitEntryPoints.size(); indexCH++)
+        {
+            stateSubObjects.push_back(CreateHitGroupSubObject(clsHitEntryPoints[indexCH].data(), nullptr));
+        }
+
+        D3D12_STATE_OBJECT_DESC desc;
+        desc.NumSubobjects = stateSubObjects.size();
+        desc.pSubobjects = stateSubObjects.data();
+        desc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+        ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateStateObject(&desc, IID_PPV_ARGS(&pRayTracingDX12->m_pRtPipelineState)));
+    }
+
+    void DestroyScene()
     {
 
     }
