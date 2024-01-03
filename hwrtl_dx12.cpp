@@ -36,6 +36,7 @@ SOFTWARE.
 #include <locale>
 #include <codecvt>
 
+#include <iostream>
 #include <vector>
 #include <stdexcept>
 
@@ -62,6 +63,8 @@ _COM_SMARTPTR_TYPEDEF(IDxcOperationResult, __uuidof(IDxcOperationResult));
 _COM_SMARTPTR_TYPEDEF(IDxcBlob, __uuidof(IDxcBlob));
 _COM_SMARTPTR_TYPEDEF(ID3DBlob, __uuidof(ID3DBlob));
 _COM_SMARTPTR_TYPEDEF(ID3D12StateObject, __uuidof(ID3D12StateObject));
+_COM_SMARTPTR_TYPEDEF(ID3D12RootSignature, __uuidof(ID3D12RootSignature));
+
 
 namespace hwrtl
 {
@@ -107,6 +110,16 @@ namespace hwrtl
 #endif
     }
     
+    template<class BlotType>
+    std::string ConvertBlobToString(BlotType* pBlob)
+    {
+        std::vector<char> infoLog(pBlob->GetBufferSize() + 1);
+        memcpy(infoLog.data(), pBlob->GetBufferPointer(), pBlob->GetBufferSize());
+        infoLog[pBlob->GetBufferSize()] = 0;
+        return std::string(infoLog.data());
+    }
+
+
     struct SDXMeshInstanceInfo
     {
         ID3D12ResourcePtr m_pPositionBuffer;
@@ -537,7 +550,6 @@ namespace hwrtl
         SAccelerationStructureBuffers topLevelBuffers = BuildTopLevelAccelerationStructure(bottomLevelBuffers.pResult);
         SubmitCommandList();
         pRayTracingDX12->m_uploadBuffers.clear();
-  
     }
 
     IDxcBlobPtr CompileLibrary(const std::wstring& filename)
@@ -569,6 +581,9 @@ namespace hwrtl
         {
             IDxcBlobEncodingPtr pError;
             ThrowIfFailed(pResult->GetErrorBuffer(&pError));
+            std::string msg = ConvertBlobToString(pError.GetInterfacePtr());
+            std::cerr << msg;
+            ThrowIfFailed(-1);
         }
 
         IDxcBlobPtr pBlob;
@@ -576,46 +591,43 @@ namespace hwrtl
         return pBlob;
     }
 
-    struct SDxilLibrary
+    ID3D12RootSignaturePtr CreateRootSignature(ID3D12Device5Ptr pDevice, const D3D12_ROOT_SIGNATURE_DESC& desc)
     {
-        SDxilLibrary(ID3DBlobPtr pBlob, const std::vector<std::wstring>& entryPoint, uint32_t entryPointCount) : m_pShaderBlob(pBlob)
+        ID3DBlobPtr pSigBlob;
+        ID3DBlobPtr pErrorBlob;
+        HRESULT hr = D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &pSigBlob, &pErrorBlob);
+        if (FAILED(hr))
         {
-            m_stateSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
-            m_stateSubobject.pDesc = &m_dxilLibDesc;
-
-            m_dxilLibDesc = {};
-            m_exportDesc.resize(entryPointCount);
-            m_exportName.resize(entryPointCount);
-            if (pBlob)
-            {
-                m_dxilLibDesc.DXILLibrary.pShaderBytecode = pBlob->GetBufferPointer();
-                m_dxilLibDesc.DXILLibrary.BytecodeLength = pBlob->GetBufferSize();
-                m_dxilLibDesc.NumExports = entryPointCount;
-                m_dxilLibDesc.pExports = m_exportDesc.data();
-
-                for (uint32_t i = 0; i < entryPointCount; i++)
-                {
-                    m_exportName[i] = entryPoint[i];
-                    m_exportDesc[i].Name = m_exportName[i].c_str();
-                    m_exportDesc[i].Flags = D3D12_EXPORT_FLAG_NONE;
-                    m_exportDesc[i].ExportToRename = nullptr;
-                }
-            }
-        };
-
-        D3D12_STATE_SUBOBJECT m_stateSubobject{};
-    private:
-        D3D12_DXIL_LIBRARY_DESC m_dxilLibDesc = {};
-        ID3DBlobPtr m_pShaderBlob;
-        std::vector<std::wstring> m_exportName;
-        std::vector<D3D12_EXPORT_DESC> m_exportDesc;
-    };
-
-    static const WCHAR* hitGroupName = L"HitGroup";
+            std::string msg = ConvertBlobToString(pErrorBlob.GetInterfacePtr());
+            std::cerr << msg;
+            ThrowIfFailed(-1);
+        }
+        ID3D12RootSignaturePtr pRootSig;
+        ThrowIfFailed(pDevice->CreateRootSignature(0, pSigBlob->GetBufferPointer(), pSigBlob->GetBufferSize(), IID_PPV_ARGS(&pRootSig)));
+        return pRootSig;
+    }
     
-    D3D12_STATE_SUBOBJECT CreateDXILSubObject()
+    D3D12_STATE_SUBOBJECT CreateDXILSubObject(ID3DBlobPtr pBlob, const std::vector<std::wstring>& entryPoint)
     {
+        std::vector<D3D12_EXPORT_DESC> exportDesc;
+        exportDesc.resize(entryPoint.size());
+        for (uint32_t i = 0; i < entryPoint.size(); i++)
+        {
+            exportDesc[i].Name = entryPoint[i].c_str();
+            exportDesc[i].Flags = D3D12_EXPORT_FLAG_NONE;
+            exportDesc[i].ExportToRename = nullptr;
+        }
 
+        D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {};
+        dxilLibDesc.DXILLibrary.pShaderBytecode = pBlob->GetBufferPointer();
+        dxilLibDesc.DXILLibrary.BytecodeLength = pBlob->GetBufferSize();
+        dxilLibDesc.NumExports = entryPoint.size();
+        dxilLibDesc.pExports = exportDesc.data();
+
+        D3D12_STATE_SUBOBJECT stateSubobject{};
+        stateSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
+        stateSubobject.pDesc = &dxilLibDesc;
+        return stateSubobject;
     }
 
     D3D12_STATE_SUBOBJECT CreateHitGroupSubObject(LPCWSTR ahsExport, LPCWSTR chsExport)
@@ -623,7 +635,7 @@ namespace hwrtl
         D3D12_HIT_GROUP_DESC hitGroupDesc = {};
         hitGroupDesc.AnyHitShaderImport = ahsExport;
         hitGroupDesc.ClosestHitShaderImport = chsExport;
-        hitGroupDesc.HitGroupExport = hitGroupName;
+        hitGroupDesc.HitGroupExport = ahsExport ? ahsExport : chsExport;
 
         D3D12_STATE_SUBOBJECT hitGroupSubObject;
         hitGroupSubObject.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
@@ -631,27 +643,89 @@ namespace hwrtl
         return hitGroupSubObject;
     }
 
-    void CreateRTPipelineState(const std::wstring filename, 
-        const std::vector<std::wstring>& anyHitEntryPoints,
-        const std::vector<std::wstring>& clsHitEntryPoints, 
-        const std::vector<std::wstring>& entryPoints)
+    D3D12_STATE_SUBOBJECT CreateRootSigSubObject()
     {
 
+    }
+
+    void CreateRTPipelineState(const std::wstring filename,
+        std::vector<SShader>rtShaders)
+    {
+        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+
+        ID3DBlobPtr pDxilLib = CompileLibrary(filename);
+        
         std::vector<D3D12_STATE_SUBOBJECT> stateSubObjects;
 
-        //toto combine 3 entry points
-        ID3DBlobPtr pDxilLib = CompileLibrary(filename);
-        SDxilLibrary dxilLibrary(pDxilLib, entryPoints, entryPoints.size());
+        std::vector<std::wstring> entryPoints;
+        for (auto& rtShader : rtShaders)
+        {
+            entryPoints.push_back(rtShader.m_entryPoint);
+        }
 
-        for (uint32_t indexAH = 0; indexAH < anyHitEntryPoints.size(); indexAH++)
+        stateSubObjects.push_back(CreateDXILSubObject(pDxilLib, entryPoints));
+
+        for (auto& rtShader : rtShaders)
         {
-            stateSubObjects.push_back(CreateHitGroupSubObject(anyHitEntryPoints[indexAH].data(), nullptr));
+            switch (rtShader.m_eShaderType)
+            {
+            case ERayShaderType::RAY_AHS:
+                
+                D3D12_STATE_SUBOBJECT hitGroupSubObject = CreateHitGroupSubObject(rtShader.m_entryPoint.data(), nullptr);
+                stateSubObjects.push_back(hitGroupSubObject);
+
+                uint32_t totalDesc = rtShader.m_nCBV + rtShader.m_nSRV + rtShader.m_nUAV + rtShader.m_nSampler;
+                if (totalDesc > 0)
+                {
+                    std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
+                    for (uint32_t descRangeIndex = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; descRangeIndex <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; descRangeIndex++)
+                    {
+                        uint32_t* descRangeNum = (uint32_t*)(&rtShader.m_nSRV) + descRangeIndex;
+                        if (descRangeNum > 0)
+                        {
+                            D3D12_DESCRIPTOR_RANGE descRange;
+                            descRange.BaseShaderRegister = 0;
+                            descRange.NumDescriptors = *descRangeNum;
+                            descRange.RegisterSpace = 0;
+                            descRange.OffsetInDescriptorsFromTableStart = descRangeIndex;
+                            descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(descRangeIndex);
+                        }
+                    }
+                    
+                    std::vector<D3D12_ROOT_PARAMETER> rootParams;
+                    rootParams.resize(1);
+                    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+                    rootParams[0].DescriptorTable.NumDescriptorRanges = descRanges.size();
+                    rootParams[0].DescriptorTable.pDescriptorRanges = descRanges.data();
+
+                    D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+                    rootSigDesc.NumParameters = 1;
+                    rootSigDesc.pParameters = rootParams.data();
+                    rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
+
+                    ID3D12RootSignaturePtr rootSigPtr = CreateRootSignature(pDevice, rootSigDesc);
+                    ID3D12RootSignature* pInterface = rootSigPtr.GetInterfacePtr();
+
+                    D3D12_STATE_SUBOBJECT rootSigSubobject = {};
+                    rootSigSubobject.pDesc = &pInterface;
+                    rootSigSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE;
+                    stateSubObjects.push_back(rootSigSubobject);
+
+                    D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION association = {};
+                    association.NumExports = exportCount;
+                    association.pExports = rtShader.m_entryPoint.data();
+                    association.pSubobjectToAssociate = pSubobjectToAssociate;
+
+                }
+
+                break;
+            case ERayShaderType::RAY_CHS:
+                D3D12_STATE_SUBOBJECT stateSubObject = CreateHitGroupSubObject(nullptr, rtShader.m_entryPoint.data());
+                stateSubObjects.push_back(stateSubObject);
+                break;
+            }
         }
-        
-        for (uint32_t indexCH = 0; indexCH < clsHitEntryPoints.size(); indexCH++)
-        {
-            stateSubObjects.push_back(CreateHitGroupSubObject(clsHitEntryPoints[indexCH].data(), nullptr));
-        }
+
 
         D3D12_STATE_OBJECT_DESC desc;
         desc.NumSubobjects = stateSubObjects.size();

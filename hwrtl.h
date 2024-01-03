@@ -127,13 +127,28 @@ namespace hwrtl
 		INVALID_INSTANCE_INFO_NUM, // the size of mesh instance info should be > 0
 	};
 
+	enum class ERayShaderType
+	{
+		RAY_RGS, // ray gen shader
+		RAY_MIH, // ray miss shader 
+		RAY_AHS, // any hit shader
+		RAY_CHS, // close hit shader
+	};
+
+	struct SShader
+	{
+		ERayShaderType m_eShaderType;
+		const std::wstring m_entryPoint;
+		uint32_t m_nSRV = 0;
+		uint32_t m_nUAV = 0;
+		uint32_t m_nCBV = 0;
+		uint32_t m_nSampler = 0;
+	};
+
 	void Init();
 	EAddMeshInstancesResult AddMeshInstances(const SMeshInstancesDesc& meshInstancesDesc);
 	void BuildAccelerationStructure();
-	void CreateRTPipelineState(const std::wstring filename, const std::wstring targetString, 
-		const std::vector<std::wstring>& anyHitEntryPoints,
-		const std::vector<std::wstring>& clsHitEntryPoints,
-		const std::vector<std::wstring>& entryPoints);
+	void CreateRTPipelineState(const std::wstring filename, std::vector<SShader>rtShaders);
 	void DestroyScene();
 	void Shutdown();
 }

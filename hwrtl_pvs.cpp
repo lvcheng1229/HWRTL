@@ -142,7 +142,7 @@ namespace pvs
 		entryPoints.push_back(L"shadowChs");
 		entryPoints.push_back(L"shadowMiss");
 		entryPoints.push_back(L"ShadowHitGroup");
-		CreateRTPipelineState(L"hwrtl_pvs.hlsl", L"lib_6_3", entryPoints);
+		//CreateRTPipelineState(L"hwrtl_pvs.hlsl", L"lib_6_3", entryPoints);
 	}
 
 	CDynamicBitSet GetVisibility(uint32_t cellIndex)
