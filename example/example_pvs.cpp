@@ -7,7 +7,7 @@ using namespace hwrtl::pvs;
 int main()
 {
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
-    //_CrtSetBreakAlloc(1686);
+    //_CrtSetBreakAlloc(463);
     {
         InitPVSGenerator();
         AddOccluderBound(SOccluderBound{ Vec3(0,0,0),Vec3(1,1,1) }, 0);

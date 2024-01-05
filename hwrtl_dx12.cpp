@@ -44,6 +44,7 @@ SOFTWARE.
 #define ENABLE_DX12_DEBUG_LAYER 1
 
 #pragma comment(lib,"d3dcompiler.lib")
+#pragma comment(lib,"dxcompiler.lib")
 #pragma comment(lib,"D3D12.lib")
 #pragma comment(lib,"dxgi.lib")
 
@@ -64,6 +65,7 @@ _COM_SMARTPTR_TYPEDEF(IDxcBlob, __uuidof(IDxcBlob));
 _COM_SMARTPTR_TYPEDEF(ID3DBlob, __uuidof(ID3DBlob));
 _COM_SMARTPTR_TYPEDEF(ID3D12StateObject, __uuidof(ID3D12StateObject));
 _COM_SMARTPTR_TYPEDEF(ID3D12RootSignature, __uuidof(ID3D12RootSignature));
+_COM_SMARTPTR_TYPEDEF(IDxcValidator, __uuidof(IDxcValidator));
 
 static constexpr uint32_t MaxPayloadSizeInBytes = 32 * sizeof(float);
 
@@ -170,31 +172,16 @@ namespace hwrtl
             return m_uploadBuffers.back();
         }
 
-    private:
-        HMODULE m_dxcDll;
-        DxcCreateInstanceProc m_createFn;
+        IDxcValidatorPtr m_dxcValidator;
     };
 
     void hwrtl::CRayTracingDX12::InitDxc()
     {
-        m_dxcDll = LoadLibraryW(L"dxcompiler.dll");
-        if (m_dxcDll == nullptr)
-        {
-            ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
-        }
-        else
-        {
-            m_createFn = (DxcCreateInstanceProc)GetProcAddress(m_dxcDll, "DxcCreateInstance");
-
-            if (m_createFn == nullptr) {
-                ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
-                FreeLibrary(m_dxcDll);
-                m_dxcDll = nullptr;
-            }
-
-            ThrowIfFailed(m_createFn(CLSID_DxcCompiler, IID_PPV_ARGS(&m_pDxcCompiler)));
-            ThrowIfFailed(m_createFn(CLSID_DxcLibrary, IID_PPV_ARGS(&m_pLibrary)));
-        }
+        //https://github.com/Wumpf/nvidia-dxr-tutorial/issues/2
+        //https://www.wihlidal.com/blog/pipeline/2018-09-16-dxil-signing-post-compile/
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcValidator, IID_PPV_ARGS(&m_dxcValidator)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&m_pDxcCompiler)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&m_pLibrary)));
     }
     static CRayTracingDX12* pRayTracingDX12 = nullptr;
 
@@ -555,10 +542,9 @@ namespace hwrtl
 
     IDxcBlobPtr CompileLibrary(const std::wstring& filename)
     {
-        static const std::wstring currentPath(string_2_wstring(__FILE__));
-        std::size_t dirPos = currentPath.find(L"hwrtl_dx12.cpp");
+        std::size_t dirPos = string_2_wstring(__FILE__).find(L"hwrtl_dx12.cpp");
 
-        std::wstring shaderPath = currentPath.substr(0, dirPos) + filename;
+        std::wstring shaderPath = string_2_wstring(__FILE__).substr(0, dirPos) + filename;
         std::ifstream shaderFile(shaderPath);
 
         if (shaderFile.good() == false)
@@ -583,12 +569,23 @@ namespace hwrtl
             IDxcBlobEncodingPtr pError;
             ThrowIfFailed(pResult->GetErrorBuffer(&pError));
             std::string msg = ConvertBlobToString(pError.GetInterfacePtr());
-            std::cerr << msg;
+            std::cout << msg;
             ThrowIfFailed(-1);
         }
 
         IDxcBlobPtr pBlob;
         ThrowIfFailed(pResult->GetResult(&pBlob));
+
+        IDxcOperationResultPtr pValidResult;
+        pRayTracingDX12->m_dxcValidator->Validate(pBlob, DxcValidatorFlags_InPlaceEdit, &pValidResult);
+
+        HRESULT validateStatus;
+        pValidResult->GetStatus(&validateStatus);
+        if (FAILED(validateStatus))
+        {
+            ThrowIfFailed(-1);
+        }
+
         return pBlob;
     }
 
@@ -608,46 +605,58 @@ namespace hwrtl
         return pRootSig;
     }
     
-    D3D12_STATE_SUBOBJECT CreateDXILSubObject(ID3DBlobPtr pBlob, const std::vector<LPCWSTR>& entryPoints)
+    struct SDxilLibrary
     {
-        std::vector<D3D12_EXPORT_DESC> exportDesc;
-        exportDesc.resize(entryPoints.size());
-        for (uint32_t i = 0; i < entryPoints.size(); i++)
+        SDxilLibrary(ID3DBlobPtr pBlob, const WCHAR* entryPoint[], uint32_t entryPointCount) : m_pShaderBlob(pBlob)
         {
-            exportDesc[i].Name = entryPoints[i];
-            exportDesc[i].Flags = D3D12_EXPORT_FLAG_NONE;
-            exportDesc[i].ExportToRename = nullptr;
-        }
+            m_stateSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
+            m_stateSubobject.pDesc = &m_dxilLibDesc;
 
-        D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {};
-        dxilLibDesc.DXILLibrary.pShaderBytecode = pBlob->GetBufferPointer();
-        dxilLibDesc.DXILLibrary.BytecodeLength = pBlob->GetBufferSize();
-        dxilLibDesc.NumExports = entryPoints.size();
-        dxilLibDesc.pExports = exportDesc.data();
+            m_dxilLibDesc = {};
+            m_exportDesc.resize(entryPointCount);
+            m_exportName.resize(entryPointCount);
+            if (pBlob)
+            {
+                m_dxilLibDesc.DXILLibrary.pShaderBytecode = pBlob->GetBufferPointer();
+                m_dxilLibDesc.DXILLibrary.BytecodeLength = pBlob->GetBufferSize();
+                m_dxilLibDesc.NumExports = entryPointCount;
+                m_dxilLibDesc.pExports = m_exportDesc.data();
 
-        D3D12_STATE_SUBOBJECT stateSubobject{};
-        stateSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
-        stateSubobject.pDesc = &dxilLibDesc;
-        return stateSubobject;
-    }
+                for (uint32_t i = 0; i < entryPointCount; i++)
+                {
+                    m_exportName[i] = entryPoint[i];
+                    m_exportDesc[i].Name = m_exportName[i].c_str();
+                    m_exportDesc[i].Flags = D3D12_EXPORT_FLAG_NONE;
+                    m_exportDesc[i].ExportToRename = nullptr;
+                }
+            }
+        };
+
+        SDxilLibrary() : SDxilLibrary(nullptr, nullptr, 0) {}
+
+        D3D12_DXIL_LIBRARY_DESC m_dxilLibDesc = {};
+        D3D12_STATE_SUBOBJECT m_stateSubobject{};
+        ID3DBlobPtr m_pShaderBlob;
+        std::vector<D3D12_EXPORT_DESC> m_exportDesc;
+        std::vector<std::wstring> m_exportName;
+    };
 
     struct SHitProgram
     {
         SHitProgram() {};
-        SHitProgram(LPCWSTR ahsExport, LPCWSTR chsExport)
+        SHitProgram(LPCWSTR ahsExport, LPCWSTR chsExport, LPCWSTR hgExport)
         {
-            desc = {};
-            desc.AnyHitShaderImport = ahsExport;
-            desc.ClosestHitShaderImport = chsExport;
-            //desc.HitGroupExport = ahsExport ? ahsExport : chsExport; 
-            desc.HitGroupExport = L"HitGroup";
+            m_desc = {};
+            m_desc.AnyHitShaderImport = ahsExport;
+            m_desc.ClosestHitShaderImport = chsExport;
+            m_desc.HitGroupExport = hgExport;
 
-            subObject.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-            subObject.pDesc = &desc;
+            m_subObject.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+            m_subObject.pDesc = &m_desc;
         }
 
-        D3D12_HIT_GROUP_DESC desc = {};
-        D3D12_STATE_SUBOBJECT subObject = {};
+        D3D12_HIT_GROUP_DESC m_desc = {};
+        D3D12_STATE_SUBOBJECT m_subObject = {};
     };
 
     struct SExportAssociation
@@ -655,16 +664,16 @@ namespace hwrtl
         SExportAssociation() {};
         SExportAssociation(const WCHAR* exportNames[], uint32_t exportCount, const D3D12_STATE_SUBOBJECT* pSubobjectToAssociate)
         {
-            association.NumExports = exportCount;
-            association.pExports = exportNames;
-            association.pSubobjectToAssociate = pSubobjectToAssociate;
+            m_association.NumExports = exportCount;
+            m_association.pExports = exportNames;
+            m_association.pSubobjectToAssociate = pSubobjectToAssociate;
 
-            subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION;
-            subobject.pDesc = &association;
+            m_subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION;
+            m_subobject.pDesc = &m_association;
         }
 
-        D3D12_STATE_SUBOBJECT subobject = {};
-        D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION association = {};
+        D3D12_STATE_SUBOBJECT m_subobject = {};
+        D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION m_association = {};
     };
 
     struct SPipelineConfig
@@ -672,14 +681,14 @@ namespace hwrtl
         SPipelineConfig() {};
         SPipelineConfig(uint32_t maxTraceRecursionDepth)
         {
-            config.MaxTraceRecursionDepth = maxTraceRecursionDepth;
+            m_config.MaxTraceRecursionDepth = maxTraceRecursionDepth;
 
-            subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
-            subobject.pDesc = &config;
+            m_subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
+            m_subobject.pDesc = &m_config;
         }
 
-        D3D12_RAYTRACING_PIPELINE_CONFIG config = {};
-        D3D12_STATE_SUBOBJECT subobject = {};
+        D3D12_RAYTRACING_PIPELINE_CONFIG m_config = {};
+        D3D12_STATE_SUBOBJECT m_subobject = {};
     };
 
     struct SGlobalRootSignature
@@ -687,14 +696,14 @@ namespace hwrtl
         SGlobalRootSignature() {};
         SGlobalRootSignature(ID3D12Device5Ptr pDevice, const D3D12_ROOT_SIGNATURE_DESC& desc)
         {
-            pRootSig = CreateRootSignature(pDevice, desc);
-            pInterface = pRootSig.GetInterfacePtr();
-            subobject.pDesc = &pInterface;
-            subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
+            m_pRootSig = CreateRootSignature(pDevice, desc);
+            m_pInterface = m_pRootSig.GetInterfacePtr();
+            m_subobject.pDesc = &m_pInterface;
+            m_subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
         }
-        ID3D12RootSignaturePtr pRootSig;
-        ID3D12RootSignature* pInterface = nullptr;
-        D3D12_STATE_SUBOBJECT subobject = {};
+        ID3D12RootSignaturePtr m_pRootSig;
+        ID3D12RootSignature* m_pInterface = nullptr;
+        D3D12_STATE_SUBOBJECT m_subobject = {};
     };
 
     void CreateRTPipelineState(const std::wstring filename,
@@ -704,18 +713,19 @@ namespace hwrtl
     {
         ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
         
-        std::vector<LPCWSTR>pExports;
+        std::vector<LPCWSTR>pEntryPoint;
+        std::vector<std::wstring>pHitGroupExports;
         uint32_t hitProgramNum = 0;
         
         for (auto& rtShader : rtShaders)
         {
-            pExports.push_back(rtShader.m_entryPoint.c_str());
-
+            pEntryPoint.push_back(rtShader.m_entryPoint.c_str());
             switch (rtShader.m_eShaderType)
             {
             case ERayShaderType::RAY_AHS:
             case ERayShaderType::RAY_CHS:
                 hitProgramNum++;
+                pHitGroupExports.push_back(std::wstring(rtShader.m_entryPoint + std::wstring(L"Export")));
                 break;
             };
         }
@@ -732,7 +742,8 @@ namespace hwrtl
 
         // create dxil subobjects
         ID3DBlobPtr pDxilLib = CompileLibrary(filename);
-        stateSubObjects[subObjectsIndex] = CreateDXILSubObject(pDxilLib, pExports);
+        SDxilLibrary dxilLib(pDxilLib, pEntryPoint.data(), pEntryPoint.size());
+        stateSubObjects[subObjectsIndex] = dxilLib.m_stateSubobject;
         subObjectsIndex++;
 
         // create root signatures and export asscociation
@@ -743,15 +754,13 @@ namespace hwrtl
             switch (rtShader.m_eShaderType)
             {
             case ERayShaderType::RAY_AHS:
-                hitProgramSubObjects[hitProgramIndex] = SHitProgram(rtShader.m_entryPoint.data(), nullptr);
-                stateSubObjects[subObjectsIndex] = hitProgramSubObjects[hitProgramIndex].subObject;
-                subObjectsIndex++;
+                hitProgramSubObjects[hitProgramIndex] = SHitProgram(rtShader.m_entryPoint.data(), nullptr, pHitGroupExports[hitProgramIndex].c_str());
+                stateSubObjects[subObjectsIndex++] = hitProgramSubObjects[hitProgramIndex].m_subObject;
                 hitProgramIndex++;
                 break;
             case ERayShaderType::RAY_CHS:
-                hitProgramSubObjects[hitProgramIndex] = SHitProgram(nullptr, rtShader.m_entryPoint.data());
-                stateSubObjects[subObjectsIndex] = hitProgramSubObjects[hitProgramIndex].subObject;
-                subObjectsIndex++;
+                hitProgramSubObjects[hitProgramIndex] = SHitProgram(nullptr, rtShader.m_entryPoint.data(), pHitGroupExports[hitProgramIndex].c_str());
+                stateSubObjects[subObjectsIndex++] = hitProgramSubObjects[hitProgramIndex].m_subObject;
                 hitProgramIndex++;
                 break;
             }
@@ -767,17 +776,14 @@ namespace hwrtl
             configSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
             configSubobject.pDesc = &shaderConfig;
             stateSubObjects[subObjectsIndex] = configSubobject;
-
-            sgExportAssociation = SExportAssociation(pExports.data(), pExports.size(), &stateSubObjects[subObjectsIndex]);
-            subObjectsIndex++;
-            stateSubObjects[subObjectsIndex] = sgExportAssociation.subobject;
-            subObjectsIndex++;
+            sgExportAssociation = SExportAssociation(pEntryPoint.data(), pEntryPoint.size(), &stateSubObjects[subObjectsIndex++]);
+            stateSubObjects[subObjectsIndex++] = sgExportAssociation.m_subobject;
         }
 
         // pipeline config
         {
             SPipelineConfig pipelineConfig(maxTraceRecursionDepth);
-            stateSubObjects[subObjectsIndex] = pipelineConfig.subobject;
+            stateSubObjects[subObjectsIndex] = pipelineConfig.m_subobject;
             subObjectsIndex++;
         }
 
@@ -811,7 +817,7 @@ namespace hwrtl
             rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
             globalRootSignature = SGlobalRootSignature(pDevice, rootSigDesc);
-            stateSubObjects[subObjectsIndex] = globalRootSignature.subobject;
+            stateSubObjects[subObjectsIndex] = globalRootSignature.m_subobject;
             subObjectsIndex++;
         }
 
@@ -819,8 +825,8 @@ namespace hwrtl
         desc.NumSubobjects = stateSubObjects.size();
         desc.pSubobjects = stateSubObjects.data();
         desc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
-
-        //https://github.com/Wumpf/nvidia-dxr-tutorial/issues/2
+        
+        
         ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateStateObject(&desc, IID_PPV_ARGS(&pRayTracingDX12->m_pRtPipelineState)));
     }
 
