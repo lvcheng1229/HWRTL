@@ -131,18 +131,12 @@ namespace pvs
 	void GenerateVisibility()
 	{
 		BuildAccelerationStructure();
-		std::vector<std::wstring> entryPoints;
-		entryPoints.push_back(L"rayGen");
-		entryPoints.push_back(L"miss");
-		entryPoints.push_back(L"triangleChs");
-		entryPoints.push_back(L"planeChs");
-		entryPoints.push_back(L"TriHitGroup");
-		entryPoints.push_back(L"PlaneHitGroup");
-		entryPoints.push_back(L"PlaneHitGroup");
-		entryPoints.push_back(L"shadowChs");
-		entryPoints.push_back(L"shadowMiss");
-		entryPoints.push_back(L"ShadowHitGroup");
-		//CreateRTPipelineState(L"hwrtl_pvs.hlsl", L"lib_6_3", entryPoints);
+		std::vector<SShader>rtShaders;
+		rtShaders.push_back(SShader{ ERayShaderType::RAY_RGS,L"rayGen"});
+		rtShaders.push_back(SShader{ ERayShaderType::RAY_MIH,L"miss"});
+		rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"chs"});
+
+		CreateRTPipelineState(L"hwrtl_pvs.hlsl", rtShaders, 1, SRayTracingResources{ 1,1,0,0 });
 	}
 
 	CDynamicBitSet GetVisibility(uint32_t cellIndex)

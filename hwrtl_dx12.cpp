@@ -65,8 +65,7 @@ _COM_SMARTPTR_TYPEDEF(ID3DBlob, __uuidof(ID3DBlob));
 _COM_SMARTPTR_TYPEDEF(ID3D12StateObject, __uuidof(ID3D12StateObject));
 _COM_SMARTPTR_TYPEDEF(ID3D12RootSignature, __uuidof(ID3D12RootSignature));
 
-static constexpr uint32_t MaxPayloadSizeInBytes = 64 * sizeof(float);
-static constexpr uint32_t MaxAttributeSizeInBytes = 64 * sizeof(float);
+static constexpr uint32_t MaxPayloadSizeInBytes = 32 * sizeof(float);
 
 namespace hwrtl
 {
@@ -609,13 +608,13 @@ namespace hwrtl
         return pRootSig;
     }
     
-    D3D12_STATE_SUBOBJECT CreateDXILSubObject(ID3DBlobPtr pBlob, const std::vector<std::wstring>& entryPoint)
+    D3D12_STATE_SUBOBJECT CreateDXILSubObject(ID3DBlobPtr pBlob, const std::vector<LPCWSTR>& entryPoints)
     {
         std::vector<D3D12_EXPORT_DESC> exportDesc;
-        exportDesc.resize(entryPoint.size());
-        for (uint32_t i = 0; i < entryPoint.size(); i++)
+        exportDesc.resize(entryPoints.size());
+        for (uint32_t i = 0; i < entryPoints.size(); i++)
         {
-            exportDesc[i].Name = entryPoint[i].c_str();
+            exportDesc[i].Name = entryPoints[i];
             exportDesc[i].Flags = D3D12_EXPORT_FLAG_NONE;
             exportDesc[i].ExportToRename = nullptr;
         }
@@ -623,7 +622,7 @@ namespace hwrtl
         D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {};
         dxilLibDesc.DXILLibrary.pShaderBytecode = pBlob->GetBufferPointer();
         dxilLibDesc.DXILLibrary.BytecodeLength = pBlob->GetBufferSize();
-        dxilLibDesc.NumExports = entryPoint.size();
+        dxilLibDesc.NumExports = entryPoints.size();
         dxilLibDesc.pExports = exportDesc.data();
 
         D3D12_STATE_SUBOBJECT stateSubobject{};
@@ -634,38 +633,27 @@ namespace hwrtl
 
     struct SHitProgram
     {
+        SHitProgram() {};
         SHitProgram(LPCWSTR ahsExport, LPCWSTR chsExport)
         {
             desc = {};
             desc.AnyHitShaderImport = ahsExport;
             desc.ClosestHitShaderImport = chsExport;
-            desc.HitGroupExport = ahsExport ? ahsExport : chsExport;
+            //desc.HitGroupExport = ahsExport ? ahsExport : chsExport; 
+            desc.HitGroupExport = L"HitGroup";
 
             subObject.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
             subObject.pDesc = &desc;
         }
 
-        D3D12_HIT_GROUP_DESC desc;
-        D3D12_STATE_SUBOBJECT subObject;
+        D3D12_HIT_GROUP_DESC desc = {};
+        D3D12_STATE_SUBOBJECT subObject = {};
     };
 
-    struct SLocalRootSignature
+    struct SExportAssociation
     {
-        SLocalRootSignature(ID3D12Device5Ptr pDevice, const ID3D12RootSignaturePtr pRootSig)
-        {
-            m_pRootSig = pRootSig;
-            m_pInterface = pRootSig.GetInterfacePtr();
-            subobject.pDesc = &m_pInterface;
-            subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE;
-        }
-        ID3D12RootSignaturePtr m_pRootSig;
-        ID3D12RootSignature* m_pInterface = nullptr;
-        D3D12_STATE_SUBOBJECT subobject = {};
-    };
-
-    struct ExportAssociation
-    {
-        ExportAssociation(const WCHAR* exportNames[], uint32_t exportCount, const D3D12_STATE_SUBOBJECT* pSubobjectToAssociate)
+        SExportAssociation() {};
+        SExportAssociation(const WCHAR* exportNames[], uint32_t exportCount, const D3D12_STATE_SUBOBJECT* pSubobjectToAssociate)
         {
             association.NumExports = exportCount;
             association.pExports = exportNames;
@@ -679,119 +667,74 @@ namespace hwrtl
         D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION association = {};
     };
 
-    
-
-    D3D12_STATE_SUBOBJECT CreateHitGroupSubObject(LPCWSTR ahsExport, LPCWSTR chsExport)
+    struct SPipelineConfig
     {
-        D3D12_HIT_GROUP_DESC hitGroupDesc = {};
-        hitGroupDesc.AnyHitShaderImport = ahsExport;
-        hitGroupDesc.ClosestHitShaderImport = chsExport;
-        hitGroupDesc.HitGroupExport = ahsExport ? ahsExport : chsExport;
-
-        D3D12_STATE_SUBOBJECT hitGroupSubObject;
-        hitGroupSubObject.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-        hitGroupSubObject.pDesc = &hitGroupDesc;
-        return hitGroupSubObject;
-    }
-
-    ID3D12RootSignaturePtr CreateRootSignature(const SShader& rtShader)
-    {
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
-
-        std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
-        for (uint32_t descRangeIndex = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; descRangeIndex <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; descRangeIndex++)
+        SPipelineConfig() {};
+        SPipelineConfig(uint32_t maxTraceRecursionDepth)
         {
-            uint32_t* descRangeNum = (uint32_t*)(&rtShader.m_nSRV) + descRangeIndex;
-            if (descRangeNum > 0)
-            {
-                D3D12_DESCRIPTOR_RANGE descRange;
-                descRange.BaseShaderRegister = 0;
-                descRange.NumDescriptors = *descRangeNum;
-                descRange.RegisterSpace = 0;
-                descRange.OffsetInDescriptorsFromTableStart = descRangeIndex;
-                descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(descRangeIndex);
-                descRanges.push_back(descRange);
-            }
+            config.MaxTraceRecursionDepth = maxTraceRecursionDepth;
+
+            subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
+            subobject.pDesc = &config;
         }
 
-        std::vector<D3D12_ROOT_PARAMETER> rootParams;
-        rootParams.resize(1);
-        rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        rootParams[0].DescriptorTable.NumDescriptorRanges = descRanges.size();
-        rootParams[0].DescriptorTable.pDescriptorRanges = descRanges.data();
+        D3D12_RAYTRACING_PIPELINE_CONFIG config = {};
+        D3D12_STATE_SUBOBJECT subobject = {};
+    };
 
-        D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
-        rootSigDesc.NumParameters = 1;
-        rootSigDesc.pParameters = rootParams.data();
-        rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
-
-        ID3D12RootSignaturePtr rootSigPtr = CreateRootSignature(pDevice, rootSigDesc);
-        return rootSigPtr;
-    }
-
-    void CreateExportAssociationSubObject(
-        D3D12_STATE_SUBOBJECT* pSubobjectToAssociate,
-        uint32_t NumExports,
-        LPCWSTR* pExports)
+    struct SGlobalRootSignature
     {
-        D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION association = {};
-        association.NumExports = NumExports;
-        association.pExports = pExports;
-        association.pSubobjectToAssociate = pSubobjectToAssociate;
-
-        D3D12_STATE_SUBOBJECT associationSubObject = {};
-        associationSubObject.Type = D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION;
-        associationSubObject.pDesc = &association;
-        stateSubObjects.push_back(associationSubObject);
-    }
+        SGlobalRootSignature() {};
+        SGlobalRootSignature(ID3D12Device5Ptr pDevice, const D3D12_ROOT_SIGNATURE_DESC& desc)
+        {
+            pRootSig = CreateRootSignature(pDevice, desc);
+            pInterface = pRootSig.GetInterfacePtr();
+            subobject.pDesc = &pInterface;
+            subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
+        }
+        ID3D12RootSignaturePtr pRootSig;
+        ID3D12RootSignature* pInterface = nullptr;
+        D3D12_STATE_SUBOBJECT subobject = {};
+    };
 
     void CreateRTPipelineState(const std::wstring filename,
-        std::vector<SShader>rtShaders)
+        std::vector<SShader>rtShaders,
+        uint32_t maxTraceRecursionDepth,
+        SRayTracingResources rayTracingResources)
     {
         ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
         
+        std::vector<LPCWSTR>pExports;
         uint32_t hitProgramNum = 0;
-        uint32_t localRootSigNum = 1;
-
-        for (uint32_t index = 0; index < rtShaders.size(); index++)
+        
+        for (auto& rtShader : rtShaders)
         {
-            const SShader& rtShader = rtShaders[index];
+            pExports.push_back(rtShader.m_entryPoint.c_str());
+
             switch (rtShader.m_eShaderType)
             {
             case ERayShaderType::RAY_AHS:
             case ERayShaderType::RAY_CHS:
                 hitProgramNum++;
                 break;
-            }
-
-            uint32_t totalDesc = rtShader.m_nCBV + rtShader.m_nSRV + rtShader.m_nUAV + rtShader.m_nSampler;
-            if (totalDesc > 0)
-            {
-                localRootSigNum++;
-            }
+            };
         }
 
-        std::vector<SHitProgram>hitProgramSubObjects;
-        std::vector<SLocalRootSignature>localRootSignatures;
-        hitProgramSubObjects.resize(hitProgramNum);
-        localRootSignatures.resize(localRootSigNum);
+        uint32_t subObjectsNum = 1 + hitProgramNum + 2 + 1 + 1; // dxil subobj + hit program number + shader config * 2 + pipeline config + global root signature * 1
 
         std::vector<D3D12_STATE_SUBOBJECT> stateSubObjects;
-        std::vector<std::wstring> entryPoints;
-        std::vector<LPCWSTR>pExports;
-
-        // create dxil subobjects
-        for (auto& rtShader : rtShaders)
-        {
-            entryPoints.push_back(rtShader.m_entryPoint);
-            pExports.push_back(rtShader.m_entryPoint.c_str());
-        }
-
-        ID3DBlobPtr pDxilLib = CompileLibrary(filename);
-        stateSubObjects.push_back(CreateDXILSubObject(pDxilLib, entryPoints));
+        std::vector<SHitProgram>hitProgramSubObjects;
+        hitProgramSubObjects.resize(hitProgramNum);
+        stateSubObjects.resize(subObjectsNum);
 
         uint32_t hitProgramIndex = 0;
-        uint32_t localSigIndex = 0;
+        uint32_t subObjectsIndex = 0;
+
+        // create dxil subobjects
+        ID3DBlobPtr pDxilLib = CompileLibrary(filename);
+        stateSubObjects[subObjectsIndex] = CreateDXILSubObject(pDxilLib, pExports);
+        subObjectsIndex++;
+
         // create root signatures and export asscociation
         std::vector<const WCHAR*> emptyRootSigEntryPoints;
         for (uint32_t index = 0; index < rtShaders.size(); index++)
@@ -801,59 +744,83 @@ namespace hwrtl
             {
             case ERayShaderType::RAY_AHS:
                 hitProgramSubObjects[hitProgramIndex] = SHitProgram(rtShader.m_entryPoint.data(), nullptr);
-                stateSubObjects.push_back(hitProgramSubObjects[hitProgramIndex].subObject);
+                stateSubObjects[subObjectsIndex] = hitProgramSubObjects[hitProgramIndex].subObject;
+                subObjectsIndex++;
                 hitProgramIndex++;
                 break;
             case ERayShaderType::RAY_CHS:
                 hitProgramSubObjects[hitProgramIndex] = SHitProgram(nullptr, rtShader.m_entryPoint.data());
-                stateSubObjects.push_back(hitProgramSubObjects[hitProgramIndex].subObject);
+                stateSubObjects[subObjectsIndex] = hitProgramSubObjects[hitProgramIndex].subObject;
+                subObjectsIndex++;
                 hitProgramIndex++;
                 break;
             }
-
-            uint32_t totalDesc = rtShader.m_nCBV + rtShader.m_nSRV + rtShader.m_nUAV + rtShader.m_nSampler;
-            if (totalDesc > 0)
-            {
-                ID3D12RootSignaturePtr rootSigPtr = CreateRootSignature(rtShader);
-                localRootSignatures[localSigIndex] = SLocalRootSignature(pDevice, rootSigPtr);
-                stateSubObjects.push_back(localRootSignatures[localSigIndex].subobject);
-                CreateRootSigSubObjectAndExportAssociation(pInterfaces.back(), stateSubObjects,1, &pExports[index]);
-            }
-            else
-            {
-                emptyRootSigEntryPoints.push_back(rtShader.m_entryPoint.c_str());
-            }
         }
 
-        // create empty root signature
-        {
-            D3D12_ROOT_SIGNATURE_DESC emptyDesc = {};
-            emptyDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
-            ID3D12RootSignaturePtr rootSigPtr = CreateRootSignature(pDevice, emptyDesc);
-            psoRootSigs.push_back(rootSigPtr);
-            pInterfaces.push_back(rootSigPtr.GetInterfacePtr());
-            D3D12_STATE_SUBOBJECT rootSigSubobject = {};
-            rootSigSubobject.pDesc = pInterfaces.back();
-            rootSigSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE;
-            stateSubObjects.push_back(rootSigSubobject);
-
-            CreateRootSigSubObjectAndExportAssociation(pInterfaces.back(), stateSubObjects, emptyRootSigEntryPoints.size(), emptyRootSigEntryPoints.data());
-        }
-
+        // shader config subobject and export associations
+        SExportAssociation sgExportAssociation;
         {
             D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
-            shaderConfig.MaxAttributeSizeInBytes = MaxAttributeSizeInBytes;
+            shaderConfig.MaxAttributeSizeInBytes = D3D12_RAYTRACING_MAX_ATTRIBUTE_SIZE_IN_BYTES;
             shaderConfig.MaxPayloadSizeInBytes = MaxPayloadSizeInBytes;
             D3D12_STATE_SUBOBJECT configSubobject = {};
             configSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
             configSubobject.pDesc = &shaderConfig;
-            stateSubObjects.push_back(configSubobject);
+            stateSubObjects[subObjectsIndex] = configSubobject;
+
+            sgExportAssociation = SExportAssociation(pExports.data(), pExports.size(), &stateSubObjects[subObjectsIndex]);
+            subObjectsIndex++;
+            stateSubObjects[subObjectsIndex] = sgExportAssociation.subobject;
+            subObjectsIndex++;
+        }
+
+        // pipeline config
+        {
+            SPipelineConfig pipelineConfig(maxTraceRecursionDepth);
+            stateSubObjects[subObjectsIndex] = pipelineConfig.subobject;
+            subObjectsIndex++;
+        }
+
+        // global root signature
+        SGlobalRootSignature globalRootSignature;
+        {
+            std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
+            for (uint32_t descRangeIndex = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; descRangeIndex <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; descRangeIndex++)
+            {
+                if (rayTracingResources[descRangeIndex] > 0)
+                {
+                    D3D12_DESCRIPTOR_RANGE descRange;
+                    descRange.BaseShaderRegister = 0;
+                    descRange.NumDescriptors = rayTracingResources[descRangeIndex];
+                    descRange.RegisterSpace = 0;
+                    descRange.OffsetInDescriptorsFromTableStart = descRangeIndex;
+                    descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(descRangeIndex);
+                    descRanges.push_back(descRange);
+                }
+            }
+
+            std::vector<D3D12_ROOT_PARAMETER> rootParams;
+            rootParams.resize(1);
+            rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            rootParams[0].DescriptorTable.NumDescriptorRanges = descRanges.size();
+            rootParams[0].DescriptorTable.pDescriptorRanges = descRanges.data();
+
+            D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+            rootSigDesc.NumParameters = 1;
+            rootSigDesc.pParameters = rootParams.data();
+            rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+            globalRootSignature = SGlobalRootSignature(pDevice, rootSigDesc);
+            stateSubObjects[subObjectsIndex] = globalRootSignature.subobject;
+            subObjectsIndex++;
         }
 
         D3D12_STATE_OBJECT_DESC desc;
         desc.NumSubobjects = stateSubObjects.size();
         desc.pSubobjects = stateSubObjects.data();
         desc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+
+        //https://github.com/Wumpf/nvidia-dxr-tutorial/issues/2
         ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateStateObject(&desc, IID_PPV_ARGS(&pRayTracingDX12->m_pRtPipelineState)));
     }
 

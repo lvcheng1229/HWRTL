@@ -139,16 +139,25 @@ namespace hwrtl
 	{
 		ERayShaderType m_eShaderType;
 		const std::wstring m_entryPoint;
+	};
+
+	struct SRayTracingResources
+	{
 		uint32_t m_nSRV = 0;
 		uint32_t m_nUAV = 0;
 		uint32_t m_nCBV = 0;
 		uint32_t m_nSampler = 0;
+
+		uint32_t operator[](std::size_t index)
+		{
+			return *((uint32_t*)(this) + index);
+		}
 	};
 
 	void Init();
 	EAddMeshInstancesResult AddMeshInstances(const SMeshInstancesDesc& meshInstancesDesc);
 	void BuildAccelerationStructure();
-	void CreateRTPipelineState(const std::wstring filename, std::vector<SShader>rtShaders);
+	void CreateRTPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SRayTracingResources rayTracingResources);
 	void DestroyScene();
 	void Shutdown();
 }
