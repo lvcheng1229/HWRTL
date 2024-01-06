@@ -13,6 +13,7 @@ int main()
         AddOccluderBound(SOccluderBound{ Vec3(0,0,0),Vec3(1,1,1) }, 0);
         AddPlayerCell(SPVSCell{ Vec3(-1, -1, -1), Vec3(-0.5, -0.5, -0.5) });
         GenerateVisibility();
+        GetVisibility(0);
         DestoryPVSGenerator();
         std::cout << "end pvs example";
     }

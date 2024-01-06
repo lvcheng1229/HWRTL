@@ -136,11 +136,18 @@ namespace pvs
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_MIH,L"miss"});
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"chs"});
 
-		CreateRTPipelineState(L"hwrtl_pvs.hlsl", rtShaders, 1, SRayTracingResources{ 1,1,0,0 });
+		CreateRTPipelineStateAndShaderTable(L"hwrtl_pvs.hlsl", rtShaders, 1, SRayTracingResources{ 1,1,0,0 });
 	}
 
 	CDynamicBitSet GetVisibility(uint32_t cellIndex)
 	{
+		STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_UAV,ETexFormat::FT_RGBA8_UNORM,512,512 };
+		SResourceHandle bufferHandle = CreateTexture2D(texCreateDesc);
+
+		BeginRayTracing();
+		SetShaderResource(bufferHandle, ESlotType::ST_U, 0);
+		SetTLAS(0);
+		DispatchRayTracicing(512,512);
 		return CDynamicBitSet();
 	}
 

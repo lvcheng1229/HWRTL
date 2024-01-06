@@ -36,6 +36,8 @@ SOFTWARE.
 
 namespace hwrtl
 {
+	typedef uint32_t SResourceHandle;
+	
 	struct Vec3
 	{
 		float x;
@@ -154,10 +156,47 @@ namespace hwrtl
 		}
 	};
 
+	enum class ETexFormat
+	{
+		FT_RGBA8_UNORM,
+	};
+
+	enum class ETexUsage
+	{
+		USAGE_UAV,
+		USAGE_SRV,
+	};
+
+	struct STextureCreateDesc
+	{
+		ETexUsage m_eTexUsage;
+		ETexFormat m_eTexFormat;
+		uint32_t m_width;
+		uint32_t m_height;
+	};
+
+	enum class ESlotType
+	{
+		ST_T = 0, // SRV
+		ST_U, // UAV
+		ST_B, // CBV
+		ST_S, // Samper
+	};
+
 	void Init();
 	EAddMeshInstancesResult AddMeshInstances(const SMeshInstancesDesc& meshInstancesDesc);
 	void BuildAccelerationStructure();
-	void CreateRTPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SRayTracingResources rayTracingResources);
+	
+	void CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SRayTracingResources rayTracingResources);
+
+	SResourceHandle CreateTexture2D(STextureCreateDesc texCreateDesc);
+	
+	void SetShaderResource(SResourceHandle resource, ESlotType slotType, uint32_t bindIndex);
+	void SetTLAS(uint32_t bindIndex);
+
+	void BeginRayTracing();
+	void DispatchRayTracicing(uint32_t width, uint32_t height);
+
 	void DestroyScene();
 	void Shutdown();
 }
