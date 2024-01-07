@@ -30,19 +30,34 @@ namespace hwrtl
 {
 namespace gi
 {
-	void InitGIBaker()
+	struct SGIMesh
+	{
+		SResourceHandle m_hPositionBuffer;
+		uint32_t vertexCount = 0;
+	};
+
+	class CGIBaker
+	{
+	public:
+		std::vector<SGIMesh> m_giMeshes;
+	};
+
+	static CGIBaker* pGiBaker = nullptr;
+
+	void hwrtl::gi::InitGIBaker()
 	{
 		Init();
+		pGiBaker = new CGIBaker();
 	}
 
-	void AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc)
+	void hwrtl::gi::AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc)
 	{
 		std::vector<SBakeMeshDesc> bakeMeshDescs;
 		bakeMeshDescs.push_back(bakeMeshDesc);
 		AddBakeMeshs(bakeMeshDescs);
 	}
 
-	void AddBakeMeshs(const std::vector<SBakeMeshDesc>& bakeMeshDescs)
+	void hwrtl::gi::AddBakeMeshs(const std::vector<SBakeMeshDesc>& bakeMeshDescs)
 	{
 		for (uint32_t index = 0; index < bakeMeshDescs.size(); index++)
 		{
@@ -52,16 +67,18 @@ namespace gi
 			meshInstancesDesc.m_pPositionData = bakeMeshDesc.m_pPositionData;
 			meshInstancesDesc.m_pUVData = bakeMeshDesc.m_pLightMapUVData;
 			meshInstancesDesc.m_nVertexCount = bakeMeshDesc.m_nVertexCount;
-			AddRayTracingMeshInstances(meshInstancesDesc);
+			
+			SGIMesh giMesh;
+			giMesh.m_hPositionBuffer = CreateBuffer(bakeMeshDesc.m_pPositionData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
+			giMesh.vertexCount = bakeMeshDesc.m_nVertexCount;
+			pGiBaker->m_giMeshes.push_back(giMesh);
+
+			AddRayTracingMeshInstances(meshInstancesDesc, giMesh.m_hPositionBuffer);
 		}
 	}
 
-	void GenerateLightMapGBuffer()
+	void hwrtl::gi::PrePareLightMapGBufferPass()
 	{
-		STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_SRV | ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,512,512 };
-		SResourceHandle posTex = CreateTexture2D(texCreateDesc);
-		SResourceHandle normTex = CreateTexture2D(texCreateDesc);
-
 		std::size_t dirPos = String2Wstring(__FILE__).find(L"hwrtl_gi.cpp");
 		std::wstring shaderPath = String2Wstring(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
 
@@ -69,8 +86,31 @@ namespace gi
 		rsShaders.push_back(SShader{ ERayShaderType::RS_VS,L"VSMain" });
 		rsShaders.push_back(SShader{ ERayShaderType::RS_PS,L"PSMain" });
 
-		SShaderResources rasterizationResources;
-		CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources);
+		SShaderResources rasterizationResources = { 0,0,1,0 };
+
+		std::vector<EVertexFormat>vertexLayouts;
+		vertexLayouts.push_back(EVertexFormat::FT_FLOAT3);
+		vertexLayouts.push_back(EVertexFormat::FT_FLOAT2);
+
+		CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources, vertexLayouts);
+	}
+
+	void hwrtl::gi::GenerateLightMapGBuffer()
+	{
+		STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_SRV | ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,512,512 };
+		SResourceHandle posTex = CreateTexture2D(texCreateDesc);
+		SResourceHandle normTex = CreateTexture2D(texCreateDesc);
+		SResourceHandle resouceHandles[2] = { posTex ,normTex };
+		SetRenderTargets(resouceHandles, 2, -1, true, true);
+		SetViewport(512, 512);
+		SetVertexBuffers(&pGiBaker->m_giMeshes[0].m_hPositionBuffer,1);
+		DrawInstanced(pGiBaker->m_giMeshes[0].vertexCount,1,0,0);
+		SubmitCommandlist();
+	}
+
+	void hwrtl::gi::DeleteGIBaker()
+	{
+		delete pGiBaker;
 	}
 }
 }

@@ -33,6 +33,11 @@ SOFTWARE.
 // TODO:
 //      1. descriptor manager
 //      2. resource state track
+//      3. command cache
+//      4. CDXDescManager SoA -> AoS
+//      5. remove temp buffers
+//      6. SMeshInstancesDesc: remove pPositionBufferData?
+//      7. log sysytem
 //
 
 
@@ -216,14 +221,14 @@ namespace hwrtl
         D3D12_CPU_DESCRIPTOR_HANDLE GetCPUHandle(uint32_t index)
         {
             D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_pDescHeap->GetCPUDescriptorHandleForHeapStart();
-            cpuHandle.ptr += m_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) * index;
+            cpuHandle.ptr += m_pDevice->GetDescriptorHandleIncrementSize(m_descHeapType) * index;
             return cpuHandle;
         }
 
         D3D12_GPU_DESCRIPTOR_HANDLE GetGPUHandle(uint32_t index)
         {
             D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = m_pDescHeap->GetGPUDescriptorHandleForHeapStart();
-            gpuHandle.ptr += m_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) * index;
+            gpuHandle.ptr += m_pDevice->GetDescriptorHandleIncrementSize(m_descHeapType) * index;
             return gpuHandle;
         }
 
@@ -273,6 +278,7 @@ namespace hwrtl
             m_nextFreeResource.resize(1024);
             rtvIndices.resize(1024);
             csuIndices.resize(1024);
+            m_vbViews.resize(1024);
             for (uint32_t index = 0; index < 1024; index++)
             {
                 m_nextFreeResource[index] = index + 1;
@@ -292,7 +298,11 @@ namespace hwrtl
         {
             if (m_nextFreeResource.size() <= m_currFreeIndex)
             {
-                m_nextFreeResource.resize((((m_currFreeIndex + 1) / 1024) + 1) * 1024);
+                uint32_t newSize = (((m_currFreeIndex + 1) / 1024) + 1) * 1024;
+                m_nextFreeResource.resize(newSize);
+                rtvIndices.resize(newSize);
+                csuIndices.resize(newSize);
+                m_vbViews.resize(newSize);
                 for (uint32_t index = m_currFreeIndex; index < m_nextFreeResource.size(); index++)
                 {
                     m_nextFreeResource[index] = index + 1;
@@ -334,9 +344,29 @@ namespace hwrtl
             rtvIndices[resouceIndex] = rtvIndex;
         }
 
+        uint32_t GetRTVIndex(uint32_t resouceIndex)
+        {
+            return rtvIndices[resouceIndex];
+        }
+
         void SetCSUIndex(uint32_t resouceIndex, uint32_t csuIndex)
         {
             csuIndices[resouceIndex] = csuIndex;
+        }
+
+        uint32_t GetCSUIndex(uint32_t resouceIndex)
+        {
+            return csuIndices[resouceIndex];
+        }
+
+        void SetVertexBufferView(uint32_t resouceIndex, D3D12_VERTEX_BUFFER_VIEW vbView)
+        {
+            m_vbViews[resouceIndex] = vbView;
+        }
+
+        D3D12_VERTEX_BUFFER_VIEW GetVertexBufferView(uint32_t resouceIndex)
+        {
+            return m_vbViews[resouceIndex];
         }
     private:
         uint32_t m_currFreeIndex;
@@ -345,6 +375,7 @@ namespace hwrtl
         std::vector<uint32_t>m_nextFreeResource;
         std::vector<int>rtvIndices;
         std::vector<int>csuIndices;
+        std::vector<D3D12_VERTEX_BUFFER_VIEW>m_vbViews;
     };
 
     class CDXDevice
@@ -352,20 +383,34 @@ namespace hwrtl
     public:
         ID3D12Device5Ptr m_pDevice;
         ID3D12GraphicsCommandList4Ptr m_pCmdList;
+        ID3D12CommandQueuePtr m_pCmdQueue;
+
+        CDXResouceManager m_tempBuffers;
 
         CDXDescManager m_rtvDescManager;
         CDXDescManager m_csuDescManager;//cbv srv uav 
 
         CDXResouceManager m_resouManager;
+        std::vector<D3D12_RESOURCE_BARRIER> m_resouceBarriers;
+    };
+
+    struct SGraphicsContext
+    {
+
     };
 
     class CDXRasterization
     {
     public:
+        SGraphicsContext m_graphicsContext;
+
+        std::vector<D3D12_VERTEX_BUFFER_VIEW>m_vbViews;
+
         ID3D12RootSignaturePtr m_pRsGlobalRootSig;
         ID3D12PipelineStatePtr m_pRSPipelinState;
 
-        
+        D3D12_CPU_DESCRIPTOR_HANDLE m_renderTargetHandles[8];
+        uint32_t m_nRenderTargetNum = 0;
 
         D3D12_VIEWPORT m_viewPort;
         D3D12_RECT m_scissorRect;
@@ -374,7 +419,7 @@ namespace hwrtl
     class CDXRayTracing
     {
     public:
-        ID3D12CommandQueuePtr m_pCmdQueue;
+        
         ID3D12CommandAllocatorPtr m_pCmdAllocator;
         
         ID3D12FencePtr m_pFence;
@@ -389,7 +434,7 @@ namespace hwrtl
         uint64_t m_nFenceValue = 0;;
 
         std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
-        CDXResouceManager m_uploadBuffers;
+        
         
         CDXDescManager m_rtDescManager;
 
@@ -490,7 +535,7 @@ namespace hwrtl
     {
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
         ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
-        ID3D12CommandQueuePtr pCmdQueue = pDXRayTracing->m_pCmdQueue;
+        ID3D12CommandQueuePtr pCmdQueue = pDXDevice->m_pCmdQueue;
         ID3D12CommandAllocatorPtr pCmdAllocator = pDXRayTracing->m_pCmdAllocator;
         ID3D12FencePtr pFence = pDXRayTracing->m_pFence;
         
@@ -508,8 +553,8 @@ namespace hwrtl
             WaitForSingleObject(fenceEvent, INFINITE);
             pCmdList->Reset(pCmdAllocator, nullptr);
         }
-
-        pDXRayTracing->m_uploadBuffers = CDXResouceManager();
+        pDXDevice->m_resouceBarriers.clear();
+        pDXDevice->m_tempBuffers = CDXResouceManager();
     }
 
 	void hwrtl::Init()
@@ -526,7 +571,7 @@ namespace hwrtl
         ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&pDxgiFactory)));
         
         pDXDevice->m_pDevice = CreateDevice(pDxgiFactory);
-        pDXRayTracing->m_pCmdQueue = CreateCommandQueue(pDXDevice->m_pDevice);
+        pDXDevice->m_pCmdQueue = CreateCommandQueue(pDXDevice->m_pDevice);
 
         // create desc heap
         pDXRayTracing->m_rtDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
@@ -606,7 +651,7 @@ namespace hwrtl
         return pBuffer;
     }
 
-    EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc)
+    EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc,SResourceHandle vbResouce)
     {
         const uint32_t nVertexCount = meshInstancesDesc.m_nVertexCount;
         const uint32_t nIndexCount = meshInstancesDesc.m_nIndexCount;
@@ -639,7 +684,9 @@ namespace hwrtl
         dxMeshInstanceInfo.instanes = meshInstancesDesc.instanes;
 
         // create vertex buffer
-        dxMeshInstanceInfo.m_pPositionBuffer = CreateDefaultBuffer(meshInstancesDesc.m_pPositionData, nVertexCount * sizeof(Vec3), pDXRayTracing->m_uploadBuffers.AllocResource());
+        auto& vbBuffer = pDXDevice->m_resouManager.GetResource(vbResouce);
+
+        dxMeshInstanceInfo.m_pPositionBuffer = vbBuffer;
         pDXRayTracing->m_dxMeshInstanceInfos.emplace_back(dxMeshInstanceInfo);
 
         return EAddMeshInstancesResult::SUCESS;
@@ -750,7 +797,7 @@ namespace hwrtl
             }
         }
 
-        ID3D12ResourcePtr pInstanceDescBuffer = CreateDefaultBuffer(instanceDescs.data(), sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * totalInstanceNum, pDXRayTracing->m_uploadBuffers.AllocResource());
+        ID3D12ResourcePtr pInstanceDescBuffer = CreateDefaultBuffer(instanceDescs.data(), sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * totalInstanceNum, pDXDevice->m_tempBuffers.AllocResource());
 
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
         asDesc.Inputs = inputs;
@@ -1107,7 +1154,7 @@ namespace hwrtl
             memcpy(shaderTableData.data() + index * ShaderTableEntrySize + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, &gpuHandle, sizeof(D3D12_GPU_DESCRIPTOR_HANDLE));
         }
 
-        pDXRayTracing->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pDXRayTracing->m_uploadBuffers.AllocResource());
+        pDXRayTracing->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pDXDevice->m_tempBuffers.AllocResource());
         SubmitCommandList();
     }
 
@@ -1120,16 +1167,6 @@ namespace hwrtl
         resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_RTV, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_NONE);
         resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_DSV, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_NONE);
         return resouceFlags;
-    }
-
-    D3D12_RESOURCE_STATES ConvertUsageToDxResouceState(ETexUsage eTexUsage)
-    {
-        D3D12_RESOURCE_STATES resouceStates = D3D12_RESOURCE_STATE_COMMON;
-        resouceStates |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_UAV, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
-        resouceStates |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_RTV, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COMMON);
-        resouceStates |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_DSV, D3D12_RESOURCE_STATE_DEPTH_WRITE | D3D12_RESOURCE_STATE_DEPTH_READ, D3D12_RESOURCE_STATE_COMMON);
-        resouceStates |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_SRV, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
-        return resouceStates;
     }
 
     DXGI_FORMAT ConvertFormatToDxFormat(ETexFormat eTexFormat)
@@ -1169,7 +1206,7 @@ namespace hwrtl
         resDesc.MipLevels = 1;
         resDesc.SampleDesc.Count = 1;
 
-        D3D12_RESOURCE_STATES InitialResourceState = ConvertUsageToDxResouceState(texCreateDesc.m_eTexUsage);
+        D3D12_RESOURCE_STATES InitialResourceState = D3D12_RESOURCE_STATE_COMMON;
         uint32_t allocIndex;
         ThrowIfFailed(pDevice->CreateCommittedResource(&defaultHeapProperies, D3D12_HEAP_FLAG_NONE, &resDesc, InitialResourceState, nullptr, IID_PPV_ARGS(&resManager.AllocResource(allocIndex))));
         resManager.SetResouceCurrentState(allocIndex, InitialResourceState);
@@ -1206,11 +1243,41 @@ namespace hwrtl
         return SResourceHandle(allocIndex);
     }
 
+    SResourceHandle hwrtl::CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage)
+    {
+        uint32_t allocIndex = 0;
+        ID3D12ResourcePtr& resource = pDXDevice->m_resouManager.AllocResource(allocIndex);
+        resource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
+        
+        if (bufferUsage == EBufferUsage::USAGE_VB || bufferUsage == EBufferUsage::USAGE_IB)
+        {
+            D3D12_VERTEX_BUFFER_VIEW vbView = {};
+            vbView.BufferLocation = resource->GetGPUVirtualAddress();
+            vbView.SizeInBytes = nByteSize;
+            vbView.StrideInBytes = nStride;
+
+            pDXDevice->m_resouManager.SetVertexBufferView(allocIndex, vbView);
+        }
+        
+        return allocIndex;
+    }
+
+    void hwrtl::SubmitCommandlist()
+    {
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+        ID3D12CommandQueuePtr pCmdQueue = pDXDevice->m_pCmdQueue;
+
+        pCmdList->Close();
+        ID3D12CommandList* pGraphicsList = pCmdList.GetInterfacePtr();
+        pCmdQueue->ExecuteCommandLists(1, &pGraphicsList);
+    }
+
     void hwrtl::SetShaderResource(SResourceHandle resource, ESlotType slotType, uint32_t bindIndex)
     {
         ID3D12ResourcePtr pResouce = pDXDevice->m_resouManager.GetResource(resource);
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
-
+        auto pCommandList = pDXDevice->m_pCmdList;
+        
         switch (slotType)
         {
         case ESlotType::ST_U:
@@ -1220,6 +1287,28 @@ namespace hwrtl
             pDevice->CreateUnorderedAccessView(pResouce, nullptr, &uavDesc, cpuHandle);
             break;
         }
+        
+        D3D12_RESOURCE_STATES stateAfter;
+        switch (slotType)
+        {
+        case ESlotType::ST_U:
+            stateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            break;
+        case ESlotType::ST_T:
+            stateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            break;
+        }
+
+        D3D12_RESOURCE_BARRIER barrier = {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.pResource = pResouce;
+        barrier.Transition.StateBefore = pDXDevice->m_resouManager.GetResouceCurrentState(resource);
+        barrier.Transition.StateAfter = stateAfter;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+        pDXDevice->m_resouManager.SetResouceCurrentState(resource, stateAfter);
+        pDXDevice->m_resouceBarriers.push_back(barrier);
 
         ValidateResource();
     }
@@ -1270,14 +1359,33 @@ namespace hwrtl
         pCmdList->SetComputeRootSignature(pDXRayTracing->m_pGlobalRootSig);
         pCmdList->SetComputeRootDescriptorTable(0, pDXRayTracing->m_rtDescManager.GetGPUHandle(0));
 
+        if (pDXDevice->m_resouceBarriers.size() > 0)
+        {
+            pCmdList->ResourceBarrier(pDXDevice->m_resouceBarriers.size(), pDXDevice->m_resouceBarriers.data());
+        }
+
         // Dispatch
         pCmdList->SetPipelineState1(pDXRayTracing->m_pRtPipelineState);
         pCmdList->DispatchRays(&raytraceDesc);
         SubmitCommandList();
     }
 
+    DXGI_FORMAT ConvertToDXVertexFormat(EVertexFormat vertexFormat)
+    {
+        switch (vertexFormat)
+        {
+        case EVertexFormat::FT_FLOAT3:
+            return DXGI_FORMAT_R32G32B32_FLOAT;
+            break;
+        case EVertexFormat::FT_FLOAT2:
+            return DXGI_FORMAT_R32G32_FLOAT;
+            break;
+        }
+        ThrowIfFailed(-1);
+        return DXGI_FORMAT_UNKNOWN;
+    }
 
-    void hwrtl::CreateRSPipelineState(const std::wstring shaderPath, std::vector<SShader> rtShaders, SShaderResources rasterizationResources)
+    void hwrtl::CreateRSPipelineState(const std::wstring shaderPath, std::vector<SShader> rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts)
     {
         auto pDevice = pDXDevice->m_pDevice;
 
@@ -1310,11 +1418,11 @@ namespace hwrtl
             ThrowIfFailed(D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr));
             ThrowIfFailed(D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr));
 
-            D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
+            std::vector<D3D12_INPUT_ELEMENT_DESC>inputElementDescs;
+            for (uint32_t index = 0; index < vertexLayouts.size(); index++)
             {
-                { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-                { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
-            };
+                inputElementDescs.push_back(D3D12_INPUT_ELEMENT_DESC{ "TEXCOORD" ,index,ConvertToDXVertexFormat(vertexLayouts[index]),index,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA ,0 });
+            }
 
             D3D12_RASTERIZER_DESC rasterizerDesc = {};
             rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
@@ -1346,7 +1454,7 @@ namespace hwrtl
             }
                 
             D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-            psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
+            psoDesc.InputLayout = { inputElementDescs.data(), static_cast<UINT>(inputElementDescs.size())};
             psoDesc.pRootSignature = pDXRasterization->m_pRsGlobalRootSig;
             psoDesc.VS.pShaderBytecode = vertexShader->GetBufferPointer();
             psoDesc.VS.BytecodeLength = vertexShader->GetBufferSize();
@@ -1365,27 +1473,63 @@ namespace hwrtl
         }
     }
 
-    void hwrtl::SetRenderTargets(SResourceHandle renderTarget, SResourceHandle depthStencil, bool bClearRT, bool bClearDs)
+    void hwrtl::SetRenderTargets(SResourceHandle* renderTargets,uint32_t renderTargetNum, SResourceHandle depthStencil, bool bClearRT, bool bClearDs)
     {
+        CDXResouceManager resouManager = pDXDevice->m_resouManager;
+        for (uint32_t index = 0; index < renderTargetNum; index++)
+        {
+            uint32_t rtvIndex = resouManager.GetRTVIndex(renderTargets[index]);
+            pDXRasterization->m_renderTargetHandles[index] = pDXDevice->m_rtvDescManager.GetCPUHandle(rtvIndex);
 
+            D3D12_RESOURCE_BARRIER barrier = {};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            barrier.Transition.pResource = resouManager.GetResource(renderTargets[index]);
+            barrier.Transition.StateBefore = resouManager.GetResouceCurrentState(renderTargets[index]);
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+            pDXDevice->m_resouManager.SetResouceCurrentState(renderTargets[index], D3D12_RESOURCE_STATE_RENDER_TARGET);
+            pDXDevice->m_resouceBarriers.push_back(barrier);
+        }
+        pDXRasterization->m_nRenderTargetNum = renderTargetNum;
     }
 
-    void hwrtl::ExecuteRasterization(float width, float height)
+    void hwrtl::SetViewport(float width, float height)
     {
         pDXRasterization->m_viewPort = { 0,0,width ,height ,0,1 };
         pDXRasterization->m_scissorRect = { 0,0,static_cast<LONG>(width) ,static_cast<LONG>(height) };
-        
+    }
+
+    void hwrtl::SetVertexBuffers(SResourceHandle* vertexBuffer, uint32_t slotNum)
+    {
+        pDXRasterization->m_vbViews.resize(slotNum);
+        for (uint32_t index = 0; index < slotNum; index++)
+        {
+            pDXDevice->m_resouManager.GetVertexBufferView(vertexBuffer[index]);
+        }
+    }
+
+    void hwrtl::DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation)
+    {
         auto pCommandList = pDXDevice->m_pCmdList;
         
         pCommandList->SetGraphicsRootSignature(pDXRasterization->m_pRsGlobalRootSig);
         pCommandList->RSSetViewports(1, &pDXRasterization->m_viewPort);
         pCommandList->RSSetScissorRects(1, &pDXRasterization->m_scissorRect);
 
-        const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
-        pCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+        if (pDXDevice->m_resouceBarriers.size() > 0)
+        {
+            pCommandList->ResourceBarrier(pDXDevice->m_resouceBarriers.size(), pDXDevice->m_resouceBarriers.data());
+        }
+
+        pCommandList->OMSetRenderTargets(pDXRasterization->m_nRenderTargetNum, pDXRasterization->m_renderTargetHandles, FALSE, nullptr);
+
+        //const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
+        //pCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
         pCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        pCommandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
-        pCommandList->DrawInstanced(3, 1, 0, 0);
+        pCommandList->IASetVertexBuffers(0, pDXRasterization->m_vbViews.size(), pDXRasterization->m_vbViews.data());
+        pCommandList->DrawInstanced(vertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
     }
 
     void DestroyScene()

@@ -186,6 +186,16 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		{
 			return *((uint32_t*)(this) + index);
 		}
+
+		uint32_t GetPreSumNum(uint32_t index)
+		{
+			uint32_t result = 0;
+			for (uint32_t i = 0; i < index; i++)
+			{
+				result += this->operator[](i);
+			}
+			return result;
+		}
 	};
 
 	enum class ETexFormat
@@ -202,6 +212,20 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		USAGE_DSV,
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(ETexUsage);
+
+	enum class EBufferUsage
+	{
+		USAGE_VB, // vertex buffer
+		USAGE_IB, // index buffer
+		USAGE_CB, // constant buffer
+	};
+	DEFINE_ENUM_FLAG_OPERATORS(EBufferUsage);
+
+	enum class EVertexFormat
+	{
+		FT_FLOAT3,
+		FT_FLOAT2,
+	};
 
 	struct STextureCreateDesc
 	{
@@ -222,9 +246,11 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	void Init();
 
 	SResourceHandle CreateTexture2D(STextureCreateDesc texCreateDesc);
+	SResourceHandle CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage);
+	void SubmitCommand();
 
 	// ray tracing pipeline
-	EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc);
+	EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc, SResourceHandle vbResouce);
 	void BuildAccelerationStructure();
 	void CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources);
 	
@@ -235,9 +261,13 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 
 	//rasterization pipeline
 	void AddRasterizationMeshs(const SMeshInstancesDesc& meshDescs);
-	void CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources);
-	void SetRenderTargets(SResourceHandle renderTarget, SResourceHandle depthStencil = -1, bool bClearRT = true, bool bClearDs = true);
-	void ExecuteRasterization(float width, float height);
+	void CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts);
+
+	void SetRenderTargets(SResourceHandle* renderTargets, uint32_t renderTargetNum, SResourceHandle depthStencil = -1, bool bClearRT = true, bool bClearDs = true);
+	void SetViewport(float width, float height);
+	void SetVertexBuffers(SResourceHandle* vertexBuffer, uint32_t slotNum = 1);
+	void DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation);
+	void SubmitCommandlist();
 
 	void DestroyScene();
 	void Shutdown();

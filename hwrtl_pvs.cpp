@@ -120,7 +120,9 @@ namespace pvs
 		meshInstancesDesc.m_pPositionData = vertices;
 		meshInstancesDesc.m_nVertexCount = 12;
 		
-		return AddRayTracingMeshInstances(meshInstancesDesc);
+		SResourceHandle handle = CreateBuffer(meshInstancesDesc.m_pPositionData, meshInstancesDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
+
+		return AddRayTracingMeshInstances(meshInstancesDesc, handle);
 	}
 
 	void AddPlayerCell(SPVSCell pvsCell)
