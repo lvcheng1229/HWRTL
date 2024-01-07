@@ -22,6 +22,19 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ***************************************************************************/
 
+
+// DOCUMENTATION
+// 
+// Dx12 hardware ray tracing library usage:
+//		step 1. copy hwrtl.h, d3dx12.h, hwrtl_dx12.cpp to your project
+//		step 2. enable graphics api by #define ENABLE_DX12_WIN 1
+// 
+// Vk hardware ray tracing libirary usage:
+//		
+// 
+
+
+
 #pragma once
 #ifndef HWRTL_H
 #define HWRTL_H
@@ -31,12 +44,28 @@ SOFTWARE.
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <locale>
+#include <codecvt>
 
-#define USE_DX12_WIN 1
+#define ENABLE_DX12_WIN 1
 
 namespace hwrtl
 {
-	typedef uint32_t SResourceHandle;
+#define DEFINE_ENUM_FLAG_OPERATORS(ENUMTYPE)\
+inline constexpr ENUMTYPE operator | (ENUMTYPE a, ENUMTYPE b)  { return ENUMTYPE(((uint32_t)a) | ((uint32_t)b)); } \
+inline ENUMTYPE &operator |= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((uint32_t &)a) |= ((uint32_t)b)); } \
+inline constexpr ENUMTYPE operator & (ENUMTYPE a, ENUMTYPE b)  { return ENUMTYPE(((uint32_t)a) & ((uint32_t)b)); } \
+inline ENUMTYPE &operator &= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((uint32_t &)a) &= ((uint32_t)b)); } \
+inline constexpr ENUMTYPE operator ~ (ENUMTYPE a)  { return ENUMTYPE(~((uint32_t)a)); } \
+inline constexpr ENUMTYPE operator ^ (ENUMTYPE a, ENUMTYPE b)  { return ENUMTYPE(((uint32_t)a) ^ ((uint32_t)b)); } \
+inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((uint32_t &)a) ^= ((uint32_t)b)); } \
+
+	inline std::wstring String2Wstring(const std::string& str)
+	{
+		return std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(str);
+	}
+
+	typedef int SResourceHandle;
 	
 	struct Vec3
 	{
@@ -135,6 +164,9 @@ namespace hwrtl
 		RAY_MIH, // ray miss shader 
 		RAY_AHS, // any hit shader
 		RAY_CHS, // close hit shader
+
+		RS_VS,	 // vertex shader
+		RS_PS,	 // pixel shader
 	};
 
 	struct SShader
@@ -143,7 +175,7 @@ namespace hwrtl
 		const std::wstring m_entryPoint;
 	};
 
-	struct SRayTracingResources
+	struct SShaderResources
 	{
 		uint32_t m_nSRV = 0;
 		uint32_t m_nUAV = 0;
@@ -159,13 +191,17 @@ namespace hwrtl
 	enum class ETexFormat
 	{
 		FT_RGBA8_UNORM,
+		FT_RGBA32_FLOAT,
 	};
 
 	enum class ETexUsage
 	{
 		USAGE_UAV,
 		USAGE_SRV,
+		USAGE_RTV,
+		USAGE_DSV,
 	};
+	DEFINE_ENUM_FLAG_OPERATORS(ETexUsage);
 
 	struct STextureCreateDesc
 	{
@@ -184,18 +220,24 @@ namespace hwrtl
 	};
 
 	void Init();
-	EAddMeshInstancesResult AddMeshInstances(const SMeshInstancesDesc& meshInstancesDesc);
-	void BuildAccelerationStructure();
-	
-	void CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SRayTracingResources rayTracingResources);
 
 	SResourceHandle CreateTexture2D(STextureCreateDesc texCreateDesc);
+
+	// ray tracing pipeline
+	EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc);
+	void BuildAccelerationStructure();
+	void CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources);
 	
 	void SetShaderResource(SResourceHandle resource, ESlotType slotType, uint32_t bindIndex);
 	void SetTLAS(uint32_t bindIndex);
-
 	void BeginRayTracing();
 	void DispatchRayTracicing(uint32_t width, uint32_t height);
+
+	//rasterization pipeline
+	void AddRasterizationMeshs(const SMeshInstancesDesc& meshDescs);
+	void CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources);
+	void SetRenderTargets(SResourceHandle renderTarget, SResourceHandle depthStencil = -1, bool bClearRT = true, bool bClearDs = true);
+	void ExecuteRasterization(float width, float height);
 
 	void DestroyScene();
 	void Shutdown();

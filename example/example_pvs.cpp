@@ -4,7 +4,7 @@
 using namespace hwrtl;
 using namespace hwrtl::pvs;
 
-int main()
+int main2()
 {
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
     //_CrtSetBreakAlloc(463);
@@ -18,4 +18,5 @@ int main()
         std::cout << "end pvs example";
     }
     _CrtDumpMemoryLeaks();
+    return 0;
 }

@@ -22,59 +22,81 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ***************************************************************************/
 
+// DOCUMENTATION
+// 
+// Enable pix gpu capture:
+//      step 1. add WinPixEventRuntime to your application https://devblogs.microsoft.com/pix/programmatic-capture/ 
+//      step 2. set ENABLE_PIX_FRAME_CAPTURE to 1 
+//      step 3. run program
+//      step 4. open the gpu capture located in HWRT/pix.wpix
+// 
+// TODO:
+//      1. descriptor manager
+//      2. resource state track
+//
+
+
 #include "HWRTL.h"
-#if USE_DX12_WIN
-#include <d3d12.h>
-#include <comdef.h>
-#include <dxgi1_4.h>
-#include <dxcapi.h>
-
-#include "d3dx12.h"
-
-#include <Windows.h>
-#include <shlobj.h>
-#include <strsafe.h>
-
-#include <locale>
-#include <codecvt>
-
-#include <iostream>
-#include <vector>
-#include <stdexcept>
+#if ENABLE_DX12_WIN
 
 #define ENABLE_THROW_FAILED_RESULT 1
 #define ENABLE_DX12_DEBUG_LAYER 1
 #define ENABLE_PIX_FRAME_CAPTURE 1
 
+//dx12 headers
+#include <d3d12.h>
+#include <dxgi1_4.h>
+#include <dxcapi.h>
+
+// windows headers
+#include <comdef.h>
+#include <Windows.h>
+#include <shlobj.h>
+#include <strsafe.h>
+#include <d3dcompiler.h>
 #if ENABLE_PIX_FRAME_CAPTURE
 #include "pix3.h"
 #endif
+
+// heaper function
+#include "d3dx12.h"
+
+// other headers
+#include <iostream>
+#include <vector>
+#include <stdexcept>
+
 
 #pragma comment(lib,"d3dcompiler.lib")
 #pragma comment(lib,"dxcompiler.lib")
 #pragma comment(lib,"D3D12.lib")
 #pragma comment(lib,"dxgi.lib")
 
-_COM_SMARTPTR_TYPEDEF(IDXGIFactory4, __uuidof(IDXGIFactory4));
-_COM_SMARTPTR_TYPEDEF(ID3D12Device5, __uuidof(ID3D12Device5));
-_COM_SMARTPTR_TYPEDEF(IDXGIAdapter1, __uuidof(IDXGIAdapter1));
-_COM_SMARTPTR_TYPEDEF(ID3D12Debug, __uuidof(ID3D12Debug));
-_COM_SMARTPTR_TYPEDEF(ID3D12CommandQueue, __uuidof(ID3D12CommandQueue));
-_COM_SMARTPTR_TYPEDEF(ID3D12CommandAllocator, __uuidof(ID3D12CommandAllocator));
-_COM_SMARTPTR_TYPEDEF(ID3D12GraphicsCommandList4, __uuidof(ID3D12GraphicsCommandList4));
-_COM_SMARTPTR_TYPEDEF(ID3D12Resource, __uuidof(ID3D12Resource));
-_COM_SMARTPTR_TYPEDEF(ID3D12Fence, __uuidof(ID3D12Fence));
-_COM_SMARTPTR_TYPEDEF(IDxcBlobEncoding, __uuidof(IDxcBlobEncoding));
-_COM_SMARTPTR_TYPEDEF(IDxcCompiler, __uuidof(IDxcCompiler));
-_COM_SMARTPTR_TYPEDEF(IDxcLibrary, __uuidof(IDxcLibrary));
-_COM_SMARTPTR_TYPEDEF(IDxcOperationResult, __uuidof(IDxcOperationResult));
-_COM_SMARTPTR_TYPEDEF(IDxcBlob, __uuidof(IDxcBlob));
-_COM_SMARTPTR_TYPEDEF(ID3DBlob, __uuidof(ID3DBlob));
-_COM_SMARTPTR_TYPEDEF(ID3D12StateObject, __uuidof(ID3D12StateObject));
-_COM_SMARTPTR_TYPEDEF(ID3D12RootSignature, __uuidof(ID3D12RootSignature));
-_COM_SMARTPTR_TYPEDEF(IDxcValidator, __uuidof(IDxcValidator));
-_COM_SMARTPTR_TYPEDEF(ID3D12StateObjectProperties, __uuidof(ID3D12StateObjectProperties));
-_COM_SMARTPTR_TYPEDEF(ID3D12DescriptorHeap, __uuidof(ID3D12DescriptorHeap));
+#define MAKE_SMART_COM_PTR(_a) _COM_SMARTPTR_TYPEDEF(_a, __uuidof(_a))
+
+MAKE_SMART_COM_PTR(IDXGIFactory4);
+MAKE_SMART_COM_PTR(ID3D12Device5);
+MAKE_SMART_COM_PTR(IDXGIAdapter1);
+MAKE_SMART_COM_PTR(ID3D12Debug);
+MAKE_SMART_COM_PTR(ID3D12CommandQueue);
+MAKE_SMART_COM_PTR(ID3D12CommandAllocator);
+MAKE_SMART_COM_PTR(ID3D12GraphicsCommandList4);
+MAKE_SMART_COM_PTR(ID3D12Resource);
+MAKE_SMART_COM_PTR(ID3D12Fence);
+MAKE_SMART_COM_PTR(IDxcBlobEncoding);
+MAKE_SMART_COM_PTR(IDxcCompiler);
+MAKE_SMART_COM_PTR(IDxcLibrary);
+MAKE_SMART_COM_PTR(IDxcOperationResult);
+MAKE_SMART_COM_PTR(IDxcBlob);
+MAKE_SMART_COM_PTR(ID3DBlob);
+MAKE_SMART_COM_PTR(ID3D12StateObject);
+MAKE_SMART_COM_PTR(ID3D12RootSignature);
+MAKE_SMART_COM_PTR(IDxcValidator);
+MAKE_SMART_COM_PTR(ID3D12StateObjectProperties);
+MAKE_SMART_COM_PTR(ID3D12DescriptorHeap);
+MAKE_SMART_COM_PTR(ID3D12PipelineState);
+
+
 
 #define align_to(_alignment, _val) (((_val + _alignment - 1) / _alignment) * _alignment)
 static constexpr uint32_t MaxPayloadSizeInBytes = 32 * sizeof(float);
@@ -148,44 +170,114 @@ namespace hwrtl
         std::vector<SMeshInstanceInfo>instanes;
     };
 
-    struct SAccelerationStructureBuffers
+    struct SDXAccelerationStructureBuffers
     {
         ID3D12ResourcePtr pScratch;
         ID3D12ResourcePtr pResult;
         ID3D12ResourcePtr pInstanceDesc;
     };
 
-    class CDescManager
-    {
-    public:
-        //D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
-        ID3D12DescriptorHeapPtr m_pDescHeap;
 
-        D3D12_CPU_DESCRIPTOR_HANDLE GetCPUHandle(uint32_t index, ID3D12Device5Ptr pDevice)
+    ID3D12DescriptorHeapPtr CreateDescriptorHeap(ID3D12Device5Ptr pDevice, uint32_t count, D3D12_DESCRIPTOR_HEAP_TYPE type, bool shaderVisible)
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+        desc.NumDescriptors = count;
+        desc.Type = type;
+        desc.Flags = shaderVisible ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE : D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+
+        ID3D12DescriptorHeapPtr pHeap;
+        ThrowIfFailed(pDevice->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&pHeap)));
+        return pHeap;
+    }
+
+    class CDXDescManager
+    {
+    public :
+        CDXDescManager() {};
+
+        void Init(ID3D12Device5Ptr pDevice, uint32_t size, D3D12_DESCRIPTOR_HEAP_TYPE descHeapType, bool shaderVisible)
+        {
+            m_pDescHeap = CreateDescriptorHeap(pDevice, size, descHeapType, shaderVisible);
+            m_descHeapType = descHeapType;
+
+            m_nextFreeDescIndex.resize(size);
+            for (uint32_t index = 0; index < size; index++)
+            {
+                m_nextFreeDescIndex[index] = index + 1;
+            }
+        }
+
+        const uint32_t GetNumdDesc()
+        {
+            D3D12_DESCRIPTOR_HEAP_DESC heapDesc = m_pDescHeap->GetDesc();
+            return heapDesc.NumDescriptors;
+        }
+
+        D3D12_CPU_DESCRIPTOR_HANDLE GetCPUHandle(uint32_t index)
         {
             D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_pDescHeap->GetCPUDescriptorHandleForHeapStart();
-            cpuHandle.ptr += pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) * index;
+            cpuHandle.ptr += m_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) * index;
             return cpuHandle;
         }
 
-        D3D12_GPU_DESCRIPTOR_HANDLE GetGPUHandle(uint32_t index, ID3D12Device5Ptr pDevice)
+        D3D12_GPU_DESCRIPTOR_HANDLE GetGPUHandle(uint32_t index)
         {
             D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = m_pDescHeap->GetGPUDescriptorHandleForHeapStart();
-            gpuHandle.ptr += pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) * index;
+            gpuHandle.ptr += m_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) * index;
             return gpuHandle;
         }
+
+        ID3D12DescriptorHeapPtr GetHeap()
+        {
+            return m_pDescHeap;
+        }
+
+        uint32_t AllocDesc()
+        {
+            if (m_nextFreeDescIndex.size() <= m_currFreeIndex)
+            {
+                m_nextFreeDescIndex.resize((((m_currFreeIndex + 1) / 1024) + 1) * 1024);
+                for (uint32_t index = m_currFreeIndex; index < m_nextFreeDescIndex.size(); index++)
+                {
+                    m_nextFreeDescIndex[index] = index + 1;
+                }
+            }
+
+            uint32_t allocIndex = m_currFreeIndex;
+            m_currFreeIndex = m_nextFreeDescIndex[m_currFreeIndex];
+            return allocIndex;
+        }
+
+        void FreeDesc(uint32_t freeIndex)
+        {
+            m_nextFreeDescIndex[freeIndex] = m_currFreeIndex;
+            m_currFreeIndex = freeIndex;
+        }
+
+    private:
+        uint32_t m_currFreeIndex;
+        std::vector<uint32_t>m_nextFreeDescIndex;
+
+        ID3D12DescriptorHeapPtr m_pDescHeap;
+        D3D12_DESCRIPTOR_HEAP_TYPE m_descHeapType;
+
+        ID3D12Device5Ptr m_pDevice;
     };
 
-    class CResouceManager
+    class CDXResouceManager
     {
     public:
-        CResouceManager()
+        CDXResouceManager()
         {
             m_resources.resize(1024);
             m_nextFreeResource.resize(1024);
+            rtvIndices.resize(1024);
+            csuIndices.resize(1024);
             for (uint32_t index = 0; index < 1024; index++)
             {
                 m_nextFreeResource[index] = index + 1;
+                rtvIndices[index] = -1;
+                csuIndices[index] = -1;
             }
             m_currFreeIndex = 0;
         }
@@ -201,6 +293,12 @@ namespace hwrtl
             if (m_nextFreeResource.size() <= m_currFreeIndex)
             {
                 m_nextFreeResource.resize((((m_currFreeIndex + 1) / 1024) + 1) * 1024);
+                for (uint32_t index = m_currFreeIndex; index < m_nextFreeResource.size(); index++)
+                {
+                    m_nextFreeResource[index] = index + 1;
+                    rtvIndices[index] = -1;
+                    csuIndices[index] = -1;
+                }
             }
 
             allocIndex = m_currFreeIndex;
@@ -221,18 +319,64 @@ namespace hwrtl
             m_currFreeIndex = index;
         }
 
+        D3D12_RESOURCE_STATES& GetResouceCurrentState(uint32_t index)
+        {
+            return m_resouceStates[index];
+        }
+
+        void SetResouceCurrentState(uint32_t index, D3D12_RESOURCE_STATES resouceState)
+        {
+            m_resouceStates[index] = resouceState;
+        }
+
+        void SetRTVIndex(uint32_t resouceIndex,uint32_t rtvIndex)
+        {
+            rtvIndices[resouceIndex] = rtvIndex;
+        }
+
+        void SetCSUIndex(uint32_t resouceIndex, uint32_t csuIndex)
+        {
+            csuIndices[resouceIndex] = csuIndex;
+        }
     private:
         uint32_t m_currFreeIndex;
+        std::vector<D3D12_RESOURCE_STATES> m_resouceStates;
         std::vector<ID3D12ResourcePtr>m_resources;
         std::vector<uint32_t>m_nextFreeResource;
+        std::vector<int>rtvIndices;
+        std::vector<int>csuIndices;
     };
 
-    struct CRayTracingDX12
+    class CDXDevice
     {
-        ID3D12Device5Ptr m_pDevice;;
+    public:
+        ID3D12Device5Ptr m_pDevice;
+        ID3D12GraphicsCommandList4Ptr m_pCmdList;
+
+        CDXDescManager m_rtvDescManager;
+        CDXDescManager m_csuDescManager;//cbv srv uav 
+
+        CDXResouceManager m_resouManager;
+    };
+
+    class CDXRasterization
+    {
+    public:
+        ID3D12RootSignaturePtr m_pRsGlobalRootSig;
+        ID3D12PipelineStatePtr m_pRSPipelinState;
+
+        
+
+        D3D12_VIEWPORT m_viewPort;
+        D3D12_RECT m_scissorRect;
+    };
+
+    class CDXRayTracing
+    {
+    public:
         ID3D12CommandQueuePtr m_pCmdQueue;
         ID3D12CommandAllocatorPtr m_pCmdAllocator;
-        ID3D12GraphicsCommandList4Ptr m_pCmdList;
+        
         ID3D12FencePtr m_pFence;
         IDxcCompilerPtr m_pDxcCompiler;
         IDxcLibraryPtr m_pLibrary;
@@ -245,14 +389,14 @@ namespace hwrtl
         uint64_t m_nFenceValue = 0;;
 
         std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
-        CResouceManager m_uploadBuffers;
-        CResouceManager m_resources;
-        CDescManager m_rtDescManager;
+        CDXResouceManager m_uploadBuffers;
+        
+        CDXDescManager m_rtDescManager;
 
         ID3D12ResourcePtr m_ptlas;
         ID3D12ResourcePtr m_pblas;
 
-        SRayTracingResources m_rtResouces;
+        SShaderResources m_rtResouces;
         uint32_t m_preSum[4];
 
 #if ENABLE_PIX_FRAME_CAPTURE
@@ -260,7 +404,9 @@ namespace hwrtl
 #endif
     };
 
-    static CRayTracingDX12* pRayTracingDX12 = nullptr;
+    static CDXDevice* pDXDevice = nullptr;
+    static CDXRasterization* pDXRasterization = nullptr;
+    static CDXRayTracing* pDXRayTracing = nullptr;
 
     //https://github.com/NVIDIAGameWorks/DxrTutorials
     /***************************************************************************
@@ -290,13 +436,6 @@ namespace hwrtl
     # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
     # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     ***************************************************************************/
-
-    std::wstring String2Wstring(const std::string& str)
-    {
-        std::wstring_convert<std::codecvt_utf8<WCHAR>> cvt;
-        std::wstring ws = cvt.from_bytes(str);
-        return ws;
-    }
 
     // init dxr
     ID3D12Device5Ptr CreateDevice(IDXGIFactory4Ptr pDxgiFactory)
@@ -335,17 +474,7 @@ namespace hwrtl
         return nullptr;
     }
 
-    ID3D12DescriptorHeapPtr CreateDescriptorHeap(ID3D12Device5Ptr pDevice, uint32_t count, D3D12_DESCRIPTOR_HEAP_TYPE type, bool shaderVisible)
-    {
-        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-        desc.NumDescriptors = count;
-        desc.Type = type;
-        desc.Flags = shaderVisible ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE : D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-
-        ID3D12DescriptorHeapPtr pHeap;
-        ThrowIfFailed(pDevice->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&pHeap)));
-        return pHeap;
-    }
+    
 
     ID3D12CommandQueuePtr CreateCommandQueue(ID3D12Device5Ptr pDevice)
     {
@@ -359,14 +488,14 @@ namespace hwrtl
 
     void SubmitCommandList(bool bWaitAndReset = true)
     {
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
-        ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
-        ID3D12CommandQueuePtr pCmdQueue = pRayTracingDX12->m_pCmdQueue;
-        ID3D12CommandAllocatorPtr pCmdAllocator = pRayTracingDX12->m_pCmdAllocator;
-        ID3D12FencePtr pFence = pRayTracingDX12->m_pFence;
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+        ID3D12CommandQueuePtr pCmdQueue = pDXRayTracing->m_pCmdQueue;
+        ID3D12CommandAllocatorPtr pCmdAllocator = pDXRayTracing->m_pCmdAllocator;
+        ID3D12FencePtr pFence = pDXRayTracing->m_pFence;
         
-        uint64_t& nfenceValue = pRayTracingDX12->m_nFenceValue;
-        HANDLE& fenceEvent = pRayTracingDX12->m_FenceEvent;
+        uint64_t& nfenceValue = pDXRayTracing->m_nFenceValue;
+        HANDLE& fenceEvent = pDXRayTracing->m_FenceEvent;
 
         pCmdList->Close();
         ID3D12CommandList* pGraphicsList = pCmdList.GetInterfacePtr();
@@ -380,50 +509,59 @@ namespace hwrtl
             pCmdList->Reset(pCmdAllocator, nullptr);
         }
 
-        pRayTracingDX12->m_uploadBuffers = CResouceManager();
+        pDXRayTracing->m_uploadBuffers = CDXResouceManager();
     }
 
-	void Init()
+	void hwrtl::Init()
 	{
-        pRayTracingDX12 = new CRayTracingDX12();
+        pDXDevice = new CDXDevice();
+        pDXRasterization = new CDXRasterization();
+        pDXRayTracing = new CDXRayTracing();
 
 #if ENABLE_PIX_FRAME_CAPTURE
-        pRayTracingDX12->m_pixModule = PIXLoadLatestWinPixGpuCapturerLibrary();
+        pDXRayTracing->m_pixModule = PIXLoadLatestWinPixGpuCapturerLibrary();
 #endif
 
 		IDXGIFactory4Ptr pDxgiFactory;
         ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&pDxgiFactory)));
         
-        pRayTracingDX12->m_pDevice = CreateDevice(pDxgiFactory);
-        pRayTracingDX12->m_pCmdQueue = CreateCommandQueue(pRayTracingDX12->m_pDevice);
+        pDXDevice->m_pDevice = CreateDevice(pDxgiFactory);
+        pDXRayTracing->m_pCmdQueue = CreateCommandQueue(pDXDevice->m_pDevice);
 
-        ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pRayTracingDX12->m_pCmdAllocator)));
-        ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pRayTracingDX12->m_pCmdAllocator, nullptr, IID_PPV_ARGS(&pRayTracingDX12->m_pCmdList)));
+        // create desc heap
+        pDXRayTracing->m_rtDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
+        pDXDevice->m_rtvDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, false);
+        pDXDevice->m_csuDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
 
-        ThrowIfFailed(pRayTracingDX12->m_pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pRayTracingDX12->m_pFence)));
-        pRayTracingDX12->m_FenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pDXRayTracing->m_pCmdAllocator)));
+        ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pDXRayTracing->m_pCmdAllocator, nullptr, IID_PPV_ARGS(&pDXDevice->m_pCmdList)));
+
+        ThrowIfFailed(pDXDevice->m_pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pDXRayTracing->m_pFence)));
+        pDXRayTracing->m_FenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
         //https://github.com/Wumpf/nvidia-dxr-tutorial/issues/2
         //https://www.wihlidal.com/blog/pipeline/2018-09-16-dxil-signing-post-compile/
-        ThrowIfFailed(DxcCreateInstance(CLSID_DxcValidator, IID_PPV_ARGS(&pRayTracingDX12->m_dxcValidator)));
-        ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&pRayTracingDX12->m_pDxcCompiler)));
-        ThrowIfFailed(DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&pRayTracingDX12->m_pLibrary)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcValidator, IID_PPV_ARGS(&pDXRayTracing->m_dxcValidator)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&pDXRayTracing->m_pDxcCompiler)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&pDXRayTracing->m_pLibrary)));
 
 #if ENABLE_PIX_FRAME_CAPTURE
+        std::size_t dirPos = String2Wstring(__FILE__).find(L"hwrtl_dx12.cpp");
+        std::wstring pixPath = String2Wstring(__FILE__).substr(0, dirPos) + L"HWRT\\pix.wpix";
+
         PIXCaptureParameters pixCaptureParameters;
-        pixCaptureParameters.GpuCaptureParameters.FileName = L"G:/HWRTL/HWRT/cap.wpix";
+        pixCaptureParameters.GpuCaptureParameters.FileName = pixPath.c_str();
         PIXBeginCapture(PIX_CAPTURE_GPU, &pixCaptureParameters);
 #endif
 	}
 
-    //https://github.com/d3dcoder/d3d12book
     static CD3DX12_HEAP_PROPERTIES defaultHeapProperies(D3D12_HEAP_TYPE_DEFAULT);
     static CD3DX12_HEAP_PROPERTIES uploadHeapProperies(D3D12_HEAP_TYPE_UPLOAD);
 
     ID3D12ResourcePtr CreateDefaultBuffer(const void* pInitData, UINT64 nByteSize, ID3D12ResourcePtr& pUploadBuffer)
     {
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
-        ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
 
         ID3D12ResourcePtr defaultBuffer;
 
@@ -448,7 +586,7 @@ namespace hwrtl
 
     ID3D12ResourcePtr CreateBuffer(uint64_t size, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES initState, const D3D12_HEAP_PROPERTIES& heapProps)
     {
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
 
         D3D12_RESOURCE_DESC bufDesc = {};
         bufDesc.Alignment = 0;
@@ -468,7 +606,7 @@ namespace hwrtl
         return pBuffer;
     }
 
-    EAddMeshInstancesResult AddMeshInstances(const SMeshInstancesDesc& meshInstancesDesc)
+    EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc)
     {
         const uint32_t nVertexCount = meshInstancesDesc.m_nVertexCount;
         const uint32_t nIndexCount = meshInstancesDesc.m_nIndexCount;
@@ -501,17 +639,19 @@ namespace hwrtl
         dxMeshInstanceInfo.instanes = meshInstancesDesc.instanes;
 
         // create vertex buffer
-        dxMeshInstanceInfo.m_pPositionBuffer = CreateDefaultBuffer(meshInstancesDesc.m_pPositionData, nVertexCount * sizeof(Vec3), pRayTracingDX12->m_uploadBuffers.AllocResource());
-        pRayTracingDX12->m_dxMeshInstanceInfos.emplace_back(dxMeshInstanceInfo);
+        dxMeshInstanceInfo.m_pPositionBuffer = CreateDefaultBuffer(meshInstancesDesc.m_pPositionData, nVertexCount * sizeof(Vec3), pDXRayTracing->m_uploadBuffers.AllocResource());
+        pDXRayTracing->m_dxMeshInstanceInfos.emplace_back(dxMeshInstanceInfo);
+
+        return EAddMeshInstancesResult::SUCESS;
     }
 
     // build bottom level acceleration structure
-    SAccelerationStructureBuffers BuildBottomLevelAccelerationStructure()
+    SDXAccelerationStructureBuffers BuildBottomLevelAccelerationStructure()
     {
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
-        ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
 
-        const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pRayTracingDX12->m_dxMeshInstanceInfos;
+        const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pDXRayTracing->m_dxMeshInstanceInfos;
         std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geomDesc;
         geomDesc.resize(dxMeshInstanceInfos.size());
 
@@ -551,7 +691,7 @@ namespace hwrtl
         uavBarrier.UAV.pResource = pResult;
         pCmdList->ResourceBarrier(1, &uavBarrier);
 
-        SAccelerationStructureBuffers resultBuffers;
+        SDXAccelerationStructureBuffers resultBuffers;
         resultBuffers.pResult = pResult;
         resultBuffers.pScratch = pScratch;
         return resultBuffers;
@@ -570,13 +710,13 @@ namespace hwrtl
         }
     }
 
-    SAccelerationStructureBuffers BuildTopLevelAccelerationStructure(ID3D12ResourcePtr pBottomLevelAS)
+    SDXAccelerationStructureBuffers BuildTopLevelAccelerationStructure(ID3D12ResourcePtr pBottomLevelAS)
     {
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
-        ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
 
         uint32_t totalInstanceNum = 0;
-        const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pRayTracingDX12->m_dxMeshInstanceInfos;
+        const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pDXRayTracing->m_dxMeshInstanceInfos;
         for (uint32_t i = 0; i < dxMeshInstanceInfos.size(); i++)
         {
             totalInstanceNum += dxMeshInstanceInfos[i].instanes.size();
@@ -610,7 +750,7 @@ namespace hwrtl
             }
         }
 
-        ID3D12ResourcePtr pInstanceDescBuffer = CreateDefaultBuffer(instanceDescs.data(), sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * totalInstanceNum, pRayTracingDX12->m_uploadBuffers.AllocResource());
+        ID3D12ResourcePtr pInstanceDescBuffer = CreateDefaultBuffer(instanceDescs.data(), sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * totalInstanceNum, pDXRayTracing->m_uploadBuffers.AllocResource());
 
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
         asDesc.Inputs = inputs;
@@ -625,7 +765,7 @@ namespace hwrtl
         uavBarrier.UAV.pResource = pResult;
         pCmdList->ResourceBarrier(1, &uavBarrier);
 
-        SAccelerationStructureBuffers resultBuffers;
+        SDXAccelerationStructureBuffers resultBuffers;
         resultBuffers.pResult = pResult;
         resultBuffers.pScratch = pScratch;
         resultBuffers.pInstanceDesc = pInstanceDescBuffer;
@@ -633,21 +773,18 @@ namespace hwrtl
     }
 
 
-    void BuildAccelerationStructure()
+    void hwrtl::BuildAccelerationStructure()
     {
-        SAccelerationStructureBuffers bottomLevelBuffers = BuildBottomLevelAccelerationStructure();
-        SAccelerationStructureBuffers topLevelBuffers = BuildTopLevelAccelerationStructure(bottomLevelBuffers.pResult);
-        pRayTracingDX12->m_pblas = bottomLevelBuffers.pResult;
-        pRayTracingDX12->m_ptlas = topLevelBuffers.pResult;
+        SDXAccelerationStructureBuffers bottomLevelBuffers = BuildBottomLevelAccelerationStructure();
+        SDXAccelerationStructureBuffers topLevelBuffers = BuildTopLevelAccelerationStructure(bottomLevelBuffers.pResult);
+        pDXRayTracing->m_pblas = bottomLevelBuffers.pResult;
+        pDXRayTracing->m_ptlas = topLevelBuffers.pResult;
         
         SubmitCommandList();
     }
 
-    IDxcBlobPtr CompileLibrary(const std::wstring& filename)
+    IDxcBlobPtr CompileLibraryDXC(const std::wstring& shaderPath)
     {
-        std::size_t dirPos = String2Wstring(__FILE__).find(L"hwrtl_dx12.cpp");
-
-        std::wstring shaderPath = String2Wstring(__FILE__).substr(0, dirPos) + filename;
         std::ifstream shaderFile(shaderPath);
 
         if (shaderFile.good() == false)
@@ -660,10 +797,10 @@ namespace hwrtl
         std::string shader = strStream.str();
 
         IDxcBlobEncodingPtr pTextBlob;
-        ThrowIfFailed(pRayTracingDX12->m_pLibrary->CreateBlobWithEncodingFromPinned((LPBYTE)shader.c_str(), (uint32_t)shader.size(), 0, &pTextBlob));
+        ThrowIfFailed(pDXRayTracing->m_pLibrary->CreateBlobWithEncodingFromPinned((LPBYTE)shader.c_str(), (uint32_t)shader.size(), 0, &pTextBlob));
 
         IDxcOperationResultPtr pResult;
-        ThrowIfFailed(pRayTracingDX12->m_pDxcCompiler->Compile(pTextBlob, shaderPath.data(), L"", L"lib_6_3", nullptr, 0, nullptr, 0, nullptr, &pResult));
+        ThrowIfFailed(pDXRayTracing->m_pDxcCompiler->Compile(pTextBlob, shaderPath.data(), L"", L"lib_6_3", nullptr, 0, nullptr, 0, nullptr, &pResult));
 
         HRESULT resultCode;
         ThrowIfFailed(pResult->GetStatus(&resultCode));
@@ -680,7 +817,7 @@ namespace hwrtl
         ThrowIfFailed(pResult->GetResult(&pBlob));
 
         IDxcOperationResultPtr pValidResult;
-        pRayTracingDX12->m_dxcValidator->Validate(pBlob, DxcValidatorFlags_InPlaceEdit, &pValidResult);
+        pDXRayTracing->m_dxcValidator->Validate(pBlob, DxcValidatorFlags_InPlaceEdit, &pValidResult);
 
         HRESULT validateStatus;
         pValidResult->GetStatus(&validateStatus);
@@ -809,18 +946,18 @@ namespace hwrtl
         D3D12_STATE_SUBOBJECT m_subobject = {};
     };
 
-    void CreateRTPipelineStateAndShaderTable(const std::wstring filename,
+    void hwrtl::CreateRTPipelineStateAndShaderTable(const std::wstring shaderPath,
         std::vector<SShader>rtShaders,
         uint32_t maxTraceRecursionDepth,
-        SRayTracingResources rayTracingResources)
+        SShaderResources rayTracingResources)
     {
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
-        pRayTracingDX12->m_rtResouces = rayTracingResources;
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+        pDXRayTracing->m_rtResouces = rayTracingResources;
 
-        pRayTracingDX12->m_preSum[0] = 0;
+        pDXRayTracing->m_preSum[0] = 0;
         for (uint32_t index = 1; index < 4; index++)
         {
-            pRayTracingDX12->m_preSum[index] = pRayTracingDX12->m_preSum[index - 1] + pRayTracingDX12->m_rtResouces[index];
+            pDXRayTracing->m_preSum[index] = pDXRayTracing->m_preSum[index - 1] + pDXRayTracing->m_rtResouces[index];
         }
 
         std::vector<LPCWSTR>pEntryPoint;
@@ -851,7 +988,7 @@ namespace hwrtl
         uint32_t subObjectsIndex = 0;
 
         // create dxil subobjects
-        ID3DBlobPtr pDxilLib = CompileLibrary(filename);
+        ID3DBlobPtr pDxilLib = CompileLibraryDXC(shaderPath);
         SDxilLibrary dxilLib(pDxilLib, pEntryPoint.data(), pEntryPoint.size());
         stateSubObjects[subObjectsIndex] = dxilLib.m_stateSubobject;
         subObjectsIndex++;
@@ -936,12 +1073,10 @@ namespace hwrtl
         desc.pSubobjects = stateSubObjects.data();
         desc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
         
-        pRayTracingDX12->m_pGlobalRootSig = globalRootSignature.m_pRootSig;
+        pDXRayTracing->m_pGlobalRootSig = globalRootSignature.m_pRootSig;
         
-        ThrowIfFailed(pDevice->CreateStateObject(&desc, IID_PPV_ARGS(&pRayTracingDX12->m_pRtPipelineState)));
+        ThrowIfFailed(pDevice->CreateStateObject(&desc, IID_PPV_ARGS(&pDXRayTracing->m_pRtPipelineState)));
 
-        // create desc heap
-        pRayTracingDX12->m_rtDescManager.m_pDescHeap = CreateDescriptorHeap(pDevice, 2, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
 
         // create shader table
         uint32_t shaderTableSize = ShaderTableEntrySize * rtShaders.size();
@@ -950,7 +1085,7 @@ namespace hwrtl
         shaderTableData.resize(shaderTableSize);
 
         ID3D12StateObjectPropertiesPtr pRtsoProps;
-        pRayTracingDX12->m_pRtPipelineState->QueryInterface(IID_PPV_ARGS(&pRtsoProps));
+        pDXRayTracing->m_pRtPipelineState->QueryInterface(IID_PPV_ARGS(&pRtsoProps));
 
         uint32_t shaderTableHGindex = 0;
         for (uint32_t index = 0; index < rtShaders.size(); index++)
@@ -968,26 +1103,33 @@ namespace hwrtl
                 break;
             };
 
-            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = pRayTracingDX12->m_rtDescManager.GetGPUHandle(0, pDevice);
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = pDXRayTracing->m_rtDescManager.GetGPUHandle(0);
             memcpy(shaderTableData.data() + index * ShaderTableEntrySize + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, &gpuHandle, sizeof(D3D12_GPU_DESCRIPTOR_HANDLE));
         }
 
-        pRayTracingDX12->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pRayTracingDX12->m_uploadBuffers.AllocResource());
+        pDXRayTracing->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pDXRayTracing->m_uploadBuffers.AllocResource());
         SubmitCommandList();
     }
 
+#define CHECK_AND_ADD_FLAG(eTexUsage,eCheckUsage,eAddedFlag,nullFlag) (((uint32_t(eTexUsage) & uint32_t(eCheckUsage)) != 0) ? eAddedFlag : nullFlag)
+
     D3D12_RESOURCE_FLAGS ConvertUsageToDxFlag(ETexUsage eTexUsage)
     {
-        switch (eTexUsage)
-        {
-        case ETexUsage::USAGE_SRV:
-            return D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
-            break;
-        case ETexUsage::USAGE_UAV:
-            return D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            break;
-        }
-        return D3D12_RESOURCE_FLAG_NONE;
+        D3D12_RESOURCE_FLAGS resouceFlags = D3D12_RESOURCE_FLAG_NONE;
+        resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_UAV, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_NONE);
+        resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_RTV, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_NONE);
+        resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_DSV, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_NONE);
+        return resouceFlags;
+    }
+
+    D3D12_RESOURCE_STATES ConvertUsageToDxResouceState(ETexUsage eTexUsage)
+    {
+        D3D12_RESOURCE_STATES resouceStates = D3D12_RESOURCE_STATE_COMMON;
+        resouceStates |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_UAV, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
+        resouceStates |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_RTV, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COMMON);
+        resouceStates |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_DSV, D3D12_RESOURCE_STATE_DEPTH_WRITE | D3D12_RESOURCE_STATE_DEPTH_READ, D3D12_RESOURCE_STATE_COMMON);
+        resouceStates |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_SRV, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
+        return resouceStates;
     }
 
     DXGI_FORMAT ConvertFormatToDxFormat(ETexFormat eTexFormat)
@@ -997,7 +1139,11 @@ namespace hwrtl
         case ETexFormat::FT_RGBA8_UNORM:
             return DXGI_FORMAT_R8G8B8A8_UNORM;
             break;
+        case ETexFormat::FT_RGBA32_FLOAT:
+            return DXGI_FORMAT_R32G32B32A32_FLOAT;
+            break;
         }
+        ThrowIfFailed(-1);
         return DXGI_FORMAT_UNKNOWN;
     }
 
@@ -1006,9 +1152,11 @@ namespace hwrtl
         return true;
     }
 
-    SResourceHandle CreateTexture2D(STextureCreateDesc texCreateDesc)
+    SResourceHandle hwrtl::CreateTexture2D(STextureCreateDesc texCreateDesc)
     {
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+
+        CDXResouceManager& resManager = pDXDevice->m_resouManager;
 
         D3D12_RESOURCE_DESC resDesc = {};
         resDesc.DepthOrArraySize = 1;
@@ -1021,24 +1169,54 @@ namespace hwrtl
         resDesc.MipLevels = 1;
         resDesc.SampleDesc.Count = 1;
 
-        //todo resouce state track
-
+        D3D12_RESOURCE_STATES InitialResourceState = ConvertUsageToDxResouceState(texCreateDesc.m_eTexUsage);
         uint32_t allocIndex;
-        ThrowIfFailed(pDevice->CreateCommittedResource(&defaultHeapProperies, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&pRayTracingDX12->m_resources.AllocResource(allocIndex))));
+        ThrowIfFailed(pDevice->CreateCommittedResource(&defaultHeapProperies, D3D12_HEAP_FLAG_NONE, &resDesc, InitialResourceState, nullptr, IID_PPV_ARGS(&resManager.AllocResource(allocIndex))));
+        resManager.SetResouceCurrentState(allocIndex, InitialResourceState);
+
+        CDXDescManager& csuDescManager = pDXDevice->m_csuDescManager;
+        CDXDescManager& rtvDescManager = pDXDevice->m_rtvDescManager;
+
+        if (uint32_t(texCreateDesc.m_eTexUsage & ETexUsage::USAGE_SRV))
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Format = resDesc.Format;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MipLevels = 1;
+
+            uint32_t srvIndex = csuDescManager.AllocDesc();
+
+            pDevice->CreateShaderResourceView(resManager.GetResource(allocIndex), &srvDesc, csuDescManager.GetCPUHandle(srvIndex));
+            resManager.SetCSUIndex(allocIndex, srvIndex);
+        }
+
+        if (uint32_t(texCreateDesc.m_eTexUsage & ETexUsage::USAGE_RTV))
+        {
+            D3D12_RENDER_TARGET_VIEW_DESC rtvDesc;
+            rtvDesc.Format = resDesc.Format;
+            rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+
+            uint32_t rtvIndex = rtvDescManager.AllocDesc();
+
+            pDevice->CreateRenderTargetView(resManager.GetResource(allocIndex), nullptr, rtvDescManager.GetCPUHandle(rtvIndex));
+            resManager.SetCSUIndex(allocIndex, rtvIndex);
+        }
+
         return SResourceHandle(allocIndex);
     }
 
-    void SetShaderResource(SResourceHandle resource, ESlotType slotType, uint32_t bindIndex)
+    void hwrtl::SetShaderResource(SResourceHandle resource, ESlotType slotType, uint32_t bindIndex)
     {
-        ID3D12ResourcePtr pResouce = pRayTracingDX12->m_resources.GetResource(resource);
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+        ID3D12ResourcePtr pResouce = pDXDevice->m_resouManager.GetResource(resource);
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
 
         switch (slotType)
         {
         case ESlotType::ST_U:
             D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
             uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = pRayTracingDX12->m_rtDescManager.GetCPUHandle(bindIndex + pRayTracingDX12->m_preSum[uint32_t(ESlotType::ST_U)], pDevice);
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = pDXRayTracing->m_rtDescManager.GetCPUHandle(bindIndex + pDXRayTracing->m_preSum[uint32_t(ESlotType::ST_U)]);
             pDevice->CreateUnorderedAccessView(pResouce, nullptr, &uavDesc, cpuHandle);
             break;
         }
@@ -1046,27 +1224,27 @@ namespace hwrtl
         ValidateResource();
     }
 
-    void SetTLAS(uint32_t bindIndex)
+    void hwrtl::SetTLAS(uint32_t bindIndex)
     {
-        ID3D12Device5Ptr pDevice = pRayTracingDX12->m_pDevice;
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.RaytracingAccelerationStructure.Location = pRayTracingDX12->m_ptlas->GetGPUVirtualAddress();
-        pDevice->CreateShaderResourceView(nullptr, &srvDesc, pRayTracingDX12->m_rtDescManager.GetCPUHandle(bindIndex + pRayTracingDX12->m_preSum[uint32_t(ESlotType::ST_T)], pDevice));
+        srvDesc.RaytracingAccelerationStructure.Location = pDXRayTracing->m_ptlas->GetGPUVirtualAddress();
+        pDevice->CreateShaderResourceView(nullptr, &srvDesc, pDXRayTracing->m_rtDescManager.GetCPUHandle(bindIndex + pDXRayTracing->m_preSum[uint32_t(ESlotType::ST_T)]));
         ValidateResource();
     }
 
-    void BeginRayTracing()
+    void hwrtl::BeginRayTracing()
     {
-        ID3D12DescriptorHeap* heaps[] = { pRayTracingDX12->m_rtDescManager.m_pDescHeap };
-        pRayTracingDX12->m_pCmdList->SetDescriptorHeaps(1, heaps);
+        ID3D12DescriptorHeap* heaps[] = { pDXRayTracing->m_rtDescManager.GetHeap()};
+        pDXDevice->m_pCmdList->SetDescriptorHeaps(1, heaps);
     }
 
-    void DispatchRayTracicing(uint32_t width, uint32_t height)
+    void hwrtl::DispatchRayTracicing(uint32_t width, uint32_t height)
     {
-
-        ID3D12GraphicsCommandList4Ptr pCmdList = pRayTracingDX12->m_pCmdList;
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
 
         D3D12_DISPATCH_RAYS_DESC raytraceDesc = {};
         raytraceDesc.Width = width;
@@ -1074,27 +1252,140 @@ namespace hwrtl
         raytraceDesc.Depth = 1;
 
         // RayGen is the first entry in the shader-table
-        raytraceDesc.RayGenerationShaderRecord.StartAddress = pRayTracingDX12->m_pShaderTable->GetGPUVirtualAddress() + 0 * ShaderTableEntrySize;
+        raytraceDesc.RayGenerationShaderRecord.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + 0 * ShaderTableEntrySize;
         raytraceDesc.RayGenerationShaderRecord.SizeInBytes = ShaderTableEntrySize;
 
         // Miss is the second entry in the shader-table
         size_t missOffset = 1 * ShaderTableEntrySize;
-        raytraceDesc.MissShaderTable.StartAddress = pRayTracingDX12->m_pShaderTable->GetGPUVirtualAddress() + missOffset;
+        raytraceDesc.MissShaderTable.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + missOffset;
         raytraceDesc.MissShaderTable.StrideInBytes = ShaderTableEntrySize;
         raytraceDesc.MissShaderTable.SizeInBytes = ShaderTableEntrySize;   // Only a s single miss-entry
 
         // Hit is the third entry in the shader-table
         size_t hitOffset = 2 * ShaderTableEntrySize;
-        raytraceDesc.HitGroupTable.StartAddress = pRayTracingDX12->m_pShaderTable->GetGPUVirtualAddress() + hitOffset;
+        raytraceDesc.HitGroupTable.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + hitOffset;
         raytraceDesc.HitGroupTable.StrideInBytes = ShaderTableEntrySize;
         raytraceDesc.HitGroupTable.SizeInBytes = ShaderTableEntrySize; //todo: multipie number
 
-        pCmdList->SetComputeRootSignature(pRayTracingDX12->m_pGlobalRootSig);
+        pCmdList->SetComputeRootSignature(pDXRayTracing->m_pGlobalRootSig);
+        pCmdList->SetComputeRootDescriptorTable(0, pDXRayTracing->m_rtDescManager.GetGPUHandle(0));
 
         // Dispatch
-        pCmdList->SetPipelineState1(pRayTracingDX12->m_pRtPipelineState);
+        pCmdList->SetPipelineState1(pDXRayTracing->m_pRtPipelineState);
         pCmdList->DispatchRays(&raytraceDesc);
         SubmitCommandList();
+    }
+
+
+    void hwrtl::CreateRSPipelineState(const std::wstring shaderPath, std::vector<SShader> rtShaders, SShaderResources rasterizationResources)
+    {
+        auto pDevice = pDXDevice->m_pDevice;
+
+        // create root signature
+        {
+            D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+            rootSigDesc.NumParameters = 0;
+            rootSigDesc.pParameters = nullptr;
+            rootSigDesc.NumStaticSamplers = 0;
+            rootSigDesc.pStaticSamplers = 0;
+            rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+            ID3DBlobPtr signature;
+            ID3DBlobPtr error;
+            ThrowIfFailed(D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error));
+            ThrowIfFailed(pDevice->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&pDXRasterization->m_pRsGlobalRootSig)));
+        }
+
+        // create pipeline state
+        {
+            ID3DBlobPtr vertexShader;
+            ID3DBlobPtr pixelShader;
+
+#if ENABLE_PIX_FRAME_CAPTURE
+            UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+            UINT compileFlags = 0;
+#endif
+
+            ThrowIfFailed(D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr));
+            ThrowIfFailed(D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr));
+
+            D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
+            {
+                { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+                { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+            };
+
+            D3D12_RASTERIZER_DESC rasterizerDesc = {};
+            rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+            rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
+            rasterizerDesc.FrontCounterClockwise = FALSE;
+            rasterizerDesc.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
+            rasterizerDesc.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+            rasterizerDesc.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+            rasterizerDesc.DepthClipEnable = TRUE;
+            rasterizerDesc.MultisampleEnable = FALSE;
+            rasterizerDesc.AntialiasedLineEnable = FALSE;
+            rasterizerDesc.ForcedSampleCount = 0;
+            rasterizerDesc.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+
+            D3D12_BLEND_DESC blendDesc = {};
+            blendDesc.AlphaToCoverageEnable = FALSE;
+            blendDesc.IndependentBlendEnable = FALSE;
+            const D3D12_RENDER_TARGET_BLEND_DESC defaultRenderTargetBlendDesc =
+            {
+                FALSE,FALSE,
+                D3D12_BLEND_ONE, D3D12_BLEND_ZERO, D3D12_BLEND_OP_ADD,
+                D3D12_BLEND_ONE, D3D12_BLEND_ZERO, D3D12_BLEND_OP_ADD,
+                D3D12_LOGIC_OP_NOOP,
+                D3D12_COLOR_WRITE_ENABLE_ALL,
+            };
+            for (UINT i = 0; i < D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+            {
+                blendDesc.RenderTarget[i] = defaultRenderTargetBlendDesc;
+            }
+                
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+            psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
+            psoDesc.pRootSignature = pDXRasterization->m_pRsGlobalRootSig;
+            psoDesc.VS.pShaderBytecode = vertexShader->GetBufferPointer();
+            psoDesc.VS.BytecodeLength = vertexShader->GetBufferSize();
+            psoDesc.PS.pShaderBytecode = pixelShader->GetBufferPointer();
+            psoDesc.PS.BytecodeLength = pixelShader->GetBufferSize();
+            psoDesc.RasterizerState = rasterizerDesc;
+            psoDesc.BlendState = blendDesc;
+            psoDesc.DepthStencilState.DepthEnable = FALSE;
+            psoDesc.DepthStencilState.StencilEnable = FALSE;
+            psoDesc.SampleMask = UINT_MAX;
+            psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+            psoDesc.NumRenderTargets = 1;
+            psoDesc.RTVFormats[0] = DXGI_FORMAT_R32G32B32A32_FLOAT;
+            psoDesc.SampleDesc.Count = 1;
+            ThrowIfFailed(pDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pDXRasterization->m_pRSPipelinState)));
+        }
+    }
+
+    void hwrtl::SetRenderTargets(SResourceHandle renderTarget, SResourceHandle depthStencil, bool bClearRT, bool bClearDs)
+    {
+
+    }
+
+    void hwrtl::ExecuteRasterization(float width, float height)
+    {
+        pDXRasterization->m_viewPort = { 0,0,width ,height ,0,1 };
+        pDXRasterization->m_scissorRect = { 0,0,static_cast<LONG>(width) ,static_cast<LONG>(height) };
+        
+        auto pCommandList = pDXDevice->m_pCmdList;
+        
+        pCommandList->SetGraphicsRootSignature(pDXRasterization->m_pRsGlobalRootSig);
+        pCommandList->RSSetViewports(1, &pDXRasterization->m_viewPort);
+        pCommandList->RSSetScissorRects(1, &pDXRasterization->m_scissorRect);
+
+        const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
+        pCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+        pCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        pCommandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
+        pCommandList->DrawInstanced(3, 1, 0, 0);
     }
 
     void DestroyScene()
@@ -1106,7 +1397,9 @@ namespace hwrtl
 #if ENABLE_PIX_FRAME_CAPTURE
         PIXEndCapture(false);
 #endif
-        delete pRayTracingDX12;
+        delete pDXRayTracing;
+        delete pDXRasterization;
+        delete pDXDevice;
 	}
 }
 

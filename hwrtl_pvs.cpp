@@ -120,7 +120,7 @@ namespace pvs
 		meshInstancesDesc.m_pPositionData = vertices;
 		meshInstancesDesc.m_nVertexCount = 12;
 		
-		return AddMeshInstances(meshInstancesDesc);
+		return AddRayTracingMeshInstances(meshInstancesDesc);
 	}
 
 	void AddPlayerCell(SPVSCell pvsCell)
@@ -136,7 +136,10 @@ namespace pvs
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_MIH,L"miss"});
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"chs"});
 
-		CreateRTPipelineStateAndShaderTable(L"hwrtl_pvs.hlsl", rtShaders, 1, SRayTracingResources{ 1,1,0,0 });
+		std::size_t dirPos = String2Wstring(__FILE__).find(L"hwrtl_pvs.cpp");
+		std::wstring shaderPath = String2Wstring(__FILE__).substr(0, dirPos) + L"hwrtl_pvs.hlsl";
+		
+		CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 1,1,0,0 });
 	}
 
 	CDynamicBitSet GetVisibility(uint32_t cellIndex)

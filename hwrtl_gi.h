@@ -22,6 +22,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ***************************************************************************/
 
+// DOCUMENTATION
+// 
+// Dx12 hardware ray tracing gi baker usage:
+//		step 1. copy hwrtl.h, d3dx12.h, hwrtl_dx12.cpp, hwrtl_gi.h and hwrtl_gi.cpp to your project
+// 
+// TODO:
+//		1. instance mesh		
+// 
+
 #pragma once
 #ifndef HWRTL_GI_H
 #define HWRTL_GI_H
@@ -32,6 +41,23 @@ namespace hwrtl
 {
 namespace gi
 {
+	struct SBakeMeshDesc
+	{
+		const Vec3* m_pPositionData = nullptr;
+		const Vec2* m_pLightMapUVData = nullptr; 
+
+		uint32_t m_nVertexCount = 0;
+		uint32_t m_nlightMapSizeX;
+		uint32_t m_nlightMapSizeY;
+
+		SMeshInstanceInfo m_meshInstanceInfo;
+	};
+
+	void InitGIBaker();
+	void AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc);
+	void AddBakeMeshs(const std::vector<SBakeMeshDesc>& bakeMeshDescs);
+	void GenerateLightMapGBuffer();
+
 }
 }
 #endif

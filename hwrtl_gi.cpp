@@ -24,9 +24,53 @@ SOFTWARE.
 
 #include "hwrtl_gi.h"
 
+
+
 namespace hwrtl
 {
 namespace gi
 {
+	void InitGIBaker()
+	{
+		Init();
+	}
+
+	void AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc)
+	{
+		std::vector<SBakeMeshDesc> bakeMeshDescs;
+		bakeMeshDescs.push_back(bakeMeshDesc);
+		AddBakeMeshs(bakeMeshDescs);
+	}
+
+	void AddBakeMeshs(const std::vector<SBakeMeshDesc>& bakeMeshDescs)
+	{
+		for (uint32_t index = 0; index < bakeMeshDescs.size(); index++)
+		{
+			const SBakeMeshDesc& bakeMeshDesc = bakeMeshDescs[index];
+			SMeshInstancesDesc meshInstancesDesc;
+			meshInstancesDesc.instanes.push_back(bakeMeshDesc.m_meshInstanceInfo);
+			meshInstancesDesc.m_pPositionData = bakeMeshDesc.m_pPositionData;
+			meshInstancesDesc.m_pUVData = bakeMeshDesc.m_pLightMapUVData;
+			meshInstancesDesc.m_nVertexCount = bakeMeshDesc.m_nVertexCount;
+			AddRayTracingMeshInstances(meshInstancesDesc);
+		}
+	}
+
+	void GenerateLightMapGBuffer()
+	{
+		STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_SRV | ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,512,512 };
+		SResourceHandle posTex = CreateTexture2D(texCreateDesc);
+		SResourceHandle normTex = CreateTexture2D(texCreateDesc);
+
+		std::size_t dirPos = String2Wstring(__FILE__).find(L"hwrtl_gi.cpp");
+		std::wstring shaderPath = String2Wstring(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
+
+		std::vector<SShader>rsShaders;
+		rsShaders.push_back(SShader{ ERayShaderType::RS_VS,L"VSMain" });
+		rsShaders.push_back(SShader{ ERayShaderType::RS_PS,L"PSMain" });
+
+		SShaderResources rasterizationResources;
+		CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources);
+	}
 }
 }

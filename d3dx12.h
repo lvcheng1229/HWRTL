@@ -12,7 +12,7 @@
 #define __D3DX12_H__
 
 #include "hwrtl.h"
-#if USE_DX12_WIN
+#if ENABLE_DX12_WIN
 
 #include "d3d12.h"
 
