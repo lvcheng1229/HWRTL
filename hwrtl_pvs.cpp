@@ -138,8 +138,8 @@ namespace pvs
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_MIH,L"miss"});
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"chs"});
 
-		std::size_t dirPos = String2Wstring(__FILE__).find(L"hwrtl_pvs.cpp");
-		std::wstring shaderPath = String2Wstring(__FILE__).substr(0, dirPos) + L"hwrtl_pvs.hlsl";
+		std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_pvs.cpp");
+		std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_pvs.hlsl";
 		
 		CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 1,1,0,0 });
 	}

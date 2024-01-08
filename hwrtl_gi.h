@@ -41,19 +41,23 @@ namespace hwrtl
 {
 namespace gi
 {
+	struct SBakeConfig
+	{
+		uint32_t m_maxAtlasSize;
+	};
+
 	struct SBakeMeshDesc
 	{
 		const Vec3* m_pPositionData = nullptr;
-		const Vec2* m_pLightMapUVData = nullptr; 
+		const Vec2* m_pLightMapUVData = nullptr;
 
 		uint32_t m_nVertexCount = 0;
-		uint32_t m_nlightMapSizeX;
-		uint32_t m_nlightMapSizeY;
+		Vec2i m_nLightMapSize;
 
 		SMeshInstanceInfo m_meshInstanceInfo;
 	};
 
-	void InitGIBaker();
+	void InitGIBaker(SBakeConfig bakeConfig);
 	void AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc);
 	void AddBakeMeshs(const std::vector<SBakeMeshDesc>& bakeMeshDescs);
 	void PrePareLightMapGBufferPass();

@@ -138,8 +138,7 @@ int main()
         boxMesh1Desc.m_pPositionData = boxGeoPositions.data();
         boxMesh1Desc.m_pLightMapUVData = boxGeoLightMapUV.data();
         boxMesh1Desc.m_nVertexCount = boxVertexCount;
-        boxMesh1Desc.m_nlightMapSizeX = boxLightMapSizeX;
-        boxMesh1Desc.m_nlightMapSizeY = boxLightMapSizeY;
+        boxMesh1Desc.m_nLightMapSize = Vec2i(boxLightMapSizeX, boxLightMapSizeY);
         boxMesh1Desc.m_meshInstanceInfo.m_transform[0][3] = -0.75;
 
         SBakeMeshDesc boxMesh2Desc = boxMesh1Desc;
@@ -149,8 +148,7 @@ int main()
         planeMesh1Desc.m_pPositionData = planeGeoPositions.data();
         planeMesh1Desc.m_pLightMapUVData = planeGeoLightMapUV.data();
         planeMesh1Desc.m_nVertexCount = planeVertexCount;
-        planeMesh1Desc.m_nlightMapSizeX = planeLightMapSizeX;
-        planeMesh1Desc.m_nlightMapSizeY = planeLightMapSizeY;
+        planeMesh1Desc.m_nLightMapSize = Vec2i(planeLightMapSizeX, planeLightMapSizeY);
         planeMesh1Desc.m_meshInstanceInfo.m_transform[2][3] = 0.1;
 
         std::vector<SBakeMeshDesc> bakeMeshDescs;
@@ -158,9 +156,12 @@ int main()
         bakeMeshDescs.push_back(boxMesh2Desc);
         bakeMeshDescs.push_back(planeMesh1Desc);
 
-        InitGIBaker();
+        SBakeConfig bakeConfig;
+        bakeConfig.m_maxAtlasSize = 1024;
+        InitGIBaker(bakeConfig);
         AddBakeMeshs(bakeMeshDescs);
         PrePareLightMapGBufferPass();
+        GenerateLightMapGBuffer();
         DeleteGIBaker();
     }
     _CrtDumpMemoryLeaks();

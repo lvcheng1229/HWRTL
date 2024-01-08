@@ -34,7 +34,7 @@ struct SGeometryVS2PS
   float4 worldPosition :TEXCOORD0;
 };
 
-cbuffer GeomConstantBuffer : register(b0)
+cbuffer CGeomConstantBuffer : register(b0)
 {
     float4x4 worldTM;
     float4   lightMapScaleAndBias;
@@ -44,10 +44,10 @@ SGeometryVS2PS LightMapGBufferGenVS(SGeometryApp2VS IN )
 {
     SGeometryVS2PS vs2PS = (SGeometryVS2PS) 0;
 
-    float2 lightMapCoord = IN.lightmapuv * GeomConstantBuffer.lightMapScaleAndBias.xy + GeomConstantBuffer.lightMapScaleAndBias.zw;
+    float2 lightMapCoord = IN.lightmapuv * lightMapScaleAndBias.xy + lightMapScaleAndBias.zw;
 
     vs2PS.position = float4((lightMapCoord - float2(0.5,0.5)) * float2(2.0,-2.0),0.0,1.0);
-    vs2PS.worldPosition = mul( GeomConstantBuffer.worldTM, float4(IN.posistion,1.0));
+    vs2PS.worldPosition = mul(worldTM, float4(IN.posistion,1.0));
     return vs2PS;
 }
 
