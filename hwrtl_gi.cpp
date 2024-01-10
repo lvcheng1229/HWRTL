@@ -386,14 +386,17 @@ namespace gi
 	{
 		SResourceHandle m_hPositionBuffer;
 		SResourceHandle m_hLightMapUVBuffer;
+		SResourceHandle m_hConstantBuffer;
         
         Vec2i m_nLightMapSize;
-        Vec2i m_nLightMapOffset;
+        Vec2i m_nAtlasOffset;
         Vec4 m_lightMapScaleAndBias;
 
-        int m_nLightMapIndex;
+        int m_nAtlasIndex;
 
 		uint32_t vertexCount = 0;
+
+        SMeshInstanceInfo m_meshInstanceInfo;
 	};
 
     struct SAtlas
@@ -413,6 +416,7 @@ namespace gi
 
         SBakeConfig m_bakeConfig;
         Vec2i m_nAtlasSize;
+        uint32_t m_nAtlasNum;
 	};
 
 	static CGIBaker* pGiBaker = nullptr;
@@ -433,6 +437,9 @@ namespace gi
 
 	void hwrtl::gi::AddBakeMeshs(const std::vector<SBakeMeshDesc>& bakeMeshDescs)
 	{
+
+
+
 		for (uint32_t index = 0; index < bakeMeshDescs.size(); index++)
 		{
 			const SBakeMeshDesc& bakeMeshDesc = bakeMeshDescs[index];
@@ -445,8 +452,10 @@ namespace gi
 			SGIMesh giMesh;
 			giMesh.m_hPositionBuffer = CreateBuffer(bakeMeshDesc.m_pPositionData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
             giMesh.m_hLightMapUVBuffer = CreateBuffer(bakeMeshDesc.m_pLightMapUVData, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB);
+            
             giMesh.vertexCount = bakeMeshDesc.m_nVertexCount;
             giMesh.m_nLightMapSize = bakeMeshDesc.m_nLightMapSize;
+            giMesh.m_meshInstanceInfo = bakeMeshDesc.m_meshInstanceInfo;
 			pGiBaker->m_giMeshes.push_back(giMesh);
 
 			AddRayTracingMeshInstances(meshInstancesDesc, giMesh.m_hPositionBuffer);
@@ -491,7 +500,7 @@ namespace gi
 
     static void PackMeshIntoAtlas()
     {
-        Vec2i& nAtlasSize = pGiBaker->m_nAtlasSize;
+        Vec2i nAtlasSize = pGiBaker->m_nAtlasSize;
         nAtlasSize = Vec2i(0, 0);
 
         std::vector<Vec2i> giMeshLightMapSize;
@@ -578,21 +587,41 @@ namespace gi
             }
         }
 
+        pGiBaker->m_nAtlasSize = bestAtlasSize;
+
         for (uint32_t index = 0; index < pGiBaker->m_giMeshes.size(); index++)
         {
             SGIMesh& giMeshDesc = pGiBaker->m_giMeshes[index];
-            giMeshDesc.m_nLightMapOffset = Vec2i(bestAtlasOffsets[index].x, bestAtlasOffsets[index].y);
-            giMeshDesc.m_nLightMapIndex = bestAtlasOffsets[index].z;
+            giMeshDesc.m_nAtlasOffset = Vec2i(bestAtlasOffsets[index].x, bestAtlasOffsets[index].y);
+            giMeshDesc.m_nAtlasIndex = bestAtlasOffsets[index].z;
             Vec2 scale = Vec2(giMeshDesc.m_nLightMapSize) / Vec2(bestAtlasSize);
-            Vec2 bias = Vec2(giMeshDesc.m_nLightMapOffset) / Vec2(bestAtlasSize);
+            Vec2 bias = Vec2(giMeshDesc.m_nAtlasOffset) / Vec2(bestAtlasSize);
             Vec4 scaleAndBias = Vec4(scale.x, scale.y, bias.x, bias.y);
             giMeshDesc.m_lightMapScaleAndBias = scaleAndBias;
         }
+
+        pGiBaker->m_nAtlasNum = bestAtlasSlices;
     }
 
     static void GenerateAtlas()
     {
+        pGiBaker->m_atlas.resize(pGiBaker->m_nAtlasNum);
 
+        for (uint32_t index = 0; index < pGiBaker->m_giMeshes.size(); index++)
+        {
+            SGIMesh& giMeshDesc = pGiBaker->m_giMeshes[index];
+            uint32_t atlasIndex = giMeshDesc.m_nAtlasIndex;
+            pGiBaker->m_atlas[atlasIndex].m_atlasGeometries.push_back(giMeshDesc);
+        }
+
+        for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
+        {
+            STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_SRV | ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,pGiBaker->m_nAtlasSize.x,pGiBaker->m_nAtlasSize.y };
+            SAtlas& atlas = pGiBaker->m_atlas[index];
+            atlas.m_hPosTexture = CreateTexture2D(texCreateDesc);
+            atlas.m_hNormalTexture = CreateTexture2D(texCreateDesc);
+            atlas.m_resultTexture = CreateTexture2D(texCreateDesc);
+        }
     }
 
     static void PrePareGBufferPassPSO()
@@ -626,30 +655,70 @@ namespace gi
 
 	void hwrtl::gi::GenerateLightMapGBuffer()
 	{
-		uint32_t lightMapSizeX = 1024;
-		uint32_t lightMapSizeY = 1024;
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
 
-		STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_SRV | ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,lightMapSizeX,lightMapSizeY };
 
-		SResourceHandle posTex = CreateTexture2D(texCreateDesc);
-		SResourceHandle normTex = CreateTexture2D(texCreateDesc);
+        for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
+        {
+            SAtlas& atlas = pGiBaker->m_atlas[index];
 
-		SResourceHandle resouceHandles[2] = { posTex ,normTex };
-		BeginRasterization();
-		SetRenderTargets(resouceHandles, 2, -1, true, true);
+            SResourceHandle posTex = atlas.m_hPosTexture;
+            SResourceHandle normTex = atlas.m_hNormalTexture;
 
-        SGIMesh& giMesh = pGiBaker->m_giMeshes[0];
-        SResourceHandle vbHandles[2] = { giMesh.m_hPositionBuffer,giMesh.m_hLightMapUVBuffer};
+            SResourceHandle resouceHandles[2] = { posTex ,normTex };
 
-		SetViewport(lightMapSizeX, lightMapSizeY);
-		SetVertexBuffers(vbHandles,2);
-		DrawInstanced(pGiBaker->m_giMeshes[0].vertexCount,1,0,0);
-		SubmitCommandlist();
+            BeginRasterization(); 
+            SetRenderTargets(resouceHandles, 2, -1, true, true);
+            SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
+
+            for (uint32_t geoIndex = 0; geoIndex < atlas.m_atlasGeometries.size(); geoIndex++)
+            {
+                SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
+                SResourceHandle vbHandles[2] = { giMesh.m_hPositionBuffer,giMesh.m_hLightMapUVBuffer };
+
+                {
+                    struct SGbufferGenCB
+                    {
+                        float m_worldTM[4][4];
+                        Vec4 lightMapScaleAndBias;
+
+                        float padding[44];
+                    };
+                    SGbufferGenCB gBufferCbData;
+                    for (uint32_t i = 0; i < 4; i++)
+                    {
+                        for (uint32_t j = 0; j < 3; j++)
+                        {
+                            gBufferCbData.m_worldTM[i][j] = giMesh.m_meshInstanceInfo.m_transform[j][i];
+                        }
+                        gBufferCbData.m_worldTM[i][3] = 0;
+                    }
+                    for (uint32_t i = 0; i < 44; i++)
+                    {
+                        gBufferCbData.padding[i] = 1.0;
+                    }
+                    gBufferCbData.lightMapScaleAndBias = giMesh.m_lightMapScaleAndBias;
+                    giMesh.m_hConstantBuffer = CreateBuffer(&gBufferCbData, sizeof(SGbufferGenCB), sizeof(SGbufferGenCB), EBufferUsage::USAGE_CB);
+                    SetConstantBuffer(giMesh.m_hConstantBuffer);
+                }
+
+
+                SetVertexBuffers(vbHandles, 2);
+                DrawInstanced(giMesh.vertexCount, 1, 0, 0);
+                
+            }
+            SubmitCommandlist();
+            WaitForPreviousFrame();
+            ResetCmdList();
+        }
 	}
 
 	void hwrtl::gi::DeleteGIBaker()
 	{
 		delete pGiBaker;
+        Shutdown();
 	}
 }
 }

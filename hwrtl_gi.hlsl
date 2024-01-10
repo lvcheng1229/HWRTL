@@ -38,6 +38,7 @@ cbuffer CGeomConstantBuffer : register(b0)
 {
     float4x4 worldTM;
     float4   lightMapScaleAndBias;
+    float padding[44];
 };
 
 SGeometryVS2PS LightMapGBufferGenVS(SGeometryApp2VS IN )
@@ -67,6 +68,6 @@ SLightMapGBufferOutput LightMapGBufferGenPS(SGeometryVS2PS IN)
     texelSize *= sqrt(2.0); 
 
     output.worldPosition      = IN.worldPosition;
-    output.worldFaceNormal    = float4(deltaPosition,texelSize);
+    output.worldFaceNormal = float4(-faceNormal, texelSize);
     return output;
 }

@@ -38,6 +38,7 @@ SOFTWARE.
 //      5. remove temp buffers
 //      6. SMeshInstancesDesc: remove pPositionBufferData?
 //      7. log sysytem
+//      8. gpu memory manager: seg list and buddy allocator for cb and tex
 //
 
 
@@ -387,6 +388,10 @@ namespace hwrtl
         ID3D12Device5Ptr m_pDevice;
         ID3D12GraphicsCommandList4Ptr m_pCmdList;
         ID3D12CommandQueuePtr m_pCmdQueue;
+        ID3D12CommandAllocatorPtr m_pCmdAllocator;
+        ID3D12FencePtr m_pFence;
+        HANDLE m_FenceEvent;
+        uint64_t m_nFenceValue = 0;;
 
         CDXResouceManager m_tempBuffers;
 
@@ -423,10 +428,6 @@ namespace hwrtl
     class CDXRayTracing
     {
     public:
-        
-        ID3D12CommandAllocatorPtr m_pCmdAllocator;
-        
-        ID3D12FencePtr m_pFence;
         IDxcCompilerPtr m_pDxcCompiler;
         IDxcLibraryPtr m_pLibrary;
         IDxcValidatorPtr m_dxcValidator;
@@ -434,8 +435,7 @@ namespace hwrtl
         ID3D12ResourcePtr m_pShaderTable;
         ID3D12RootSignaturePtr m_pGlobalRootSig;
 
-        HANDLE m_FenceEvent;
-        uint64_t m_nFenceValue = 0;;
+
 
         std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
         
@@ -540,11 +540,11 @@ namespace hwrtl
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
         ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
         ID3D12CommandQueuePtr pCmdQueue = pDXDevice->m_pCmdQueue;
-        ID3D12CommandAllocatorPtr pCmdAllocator = pDXRayTracing->m_pCmdAllocator;
-        ID3D12FencePtr pFence = pDXRayTracing->m_pFence;
+        ID3D12CommandAllocatorPtr pCmdAllocator = pDXDevice->m_pCmdAllocator;
+        ID3D12FencePtr pFence = pDXDevice->m_pFence;
         
-        uint64_t& nfenceValue = pDXRayTracing->m_nFenceValue;
-        HANDLE& fenceEvent = pDXRayTracing->m_FenceEvent;
+        uint64_t& nfenceValue = pDXDevice->m_nFenceValue;
+        HANDLE& fenceEvent = pDXDevice->m_FenceEvent;
 
         pCmdList->Close();
         ID3D12CommandList* pGraphicsList = pCmdList.GetInterfacePtr();
@@ -583,11 +583,11 @@ namespace hwrtl
         pDXDevice->m_csuDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
         pDXDevice->m_dsvDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, false);
         
-        ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pDXRayTracing->m_pCmdAllocator)));
-        ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pDXRayTracing->m_pCmdAllocator, nullptr, IID_PPV_ARGS(&pDXDevice->m_pCmdList)));
+        ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pDXDevice->m_pCmdAllocator)));
+        ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pDXDevice->m_pCmdAllocator, nullptr, IID_PPV_ARGS(&pDXDevice->m_pCmdList)));
 
-        ThrowIfFailed(pDXDevice->m_pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pDXRayTracing->m_pFence)));
-        pDXRayTracing->m_FenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        ThrowIfFailed(pDXDevice->m_pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pDXDevice->m_pFence)));
+        pDXDevice->m_FenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
         //https://github.com/Wumpf/nvidia-dxr-tutorial/issues/2
         //https://www.wihlidal.com/blog/pipeline/2018-09-16-dxil-signing-post-compile/
@@ -634,7 +634,7 @@ namespace hwrtl
         return defaultBuffer;
     }
 
-    ID3D12ResourcePtr CreateBuffer(uint64_t size, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES initState, const D3D12_HEAP_PROPERTIES& heapProps)
+    ID3D12ResourcePtr DXCreateBuffer(uint64_t size, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES initState, const D3D12_HEAP_PROPERTIES& heapProps)
     {
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
 
@@ -728,8 +728,8 @@ namespace hwrtl
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info;
         pDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
 
-        ID3D12ResourcePtr pScratch = CreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
-        ID3D12ResourcePtr pResult = CreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
+        ID3D12ResourcePtr pScratch = DXCreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
+        ID3D12ResourcePtr pResult = DXCreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
 
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
         asDesc.Inputs = inputs;
@@ -783,8 +783,8 @@ namespace hwrtl
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info;
         pDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
 
-        ID3D12ResourcePtr pScratch = CreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
-        ID3D12ResourcePtr pResult = CreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
+        ID3D12ResourcePtr pScratch = DXCreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
+        ID3D12ResourcePtr pResult = DXCreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
 
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
         instanceDescs.resize(totalInstanceNum);
@@ -1252,10 +1252,11 @@ namespace hwrtl
     {
         uint32_t allocIndex = 0;
         ID3D12ResourcePtr& resource = pDXDevice->m_resouManager.AllocResource(allocIndex);
-        resource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
         
         if (bufferUsage == EBufferUsage::USAGE_VB || bufferUsage == EBufferUsage::USAGE_IB)
         {
+            resource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
+
             D3D12_VERTEX_BUFFER_VIEW vbView = {};
             vbView.BufferLocation = resource->GetGPUVirtualAddress();
             vbView.SizeInBytes = nByteSize;
@@ -1263,8 +1264,53 @@ namespace hwrtl
 
             pDXDevice->m_resouManager.SetVertexBufferView(allocIndex, vbView);
         }
+        else if (bufferUsage == EBufferUsage::USAGE_CB)
+        {
+            auto pDevice = pDXDevice->m_pDevice;
+            CDXResouceManager& resManager = pDXDevice->m_resouManager;
+            CDXDescManager& csuDescManager = pDXDevice->m_csuDescManager;
+
+            //temporary code
+            if (pInitData != nullptr)
+            {
+                resource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
+
+            }
+            else
+            {
+                resource = DXCreateBuffer(nByteSize, D3D12_RESOURCE_FLAGS::D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, uploadHeapProperies);
+            }
+            
+
+            uint32_t cbvIndex = csuDescManager.AllocDesc();
+
+            D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+            cbvDesc.BufferLocation = resource->GetGPUVirtualAddress();
+            cbvDesc.SizeInBytes = nByteSize;
+            pDevice->CreateConstantBufferView(&cbvDesc, csuDescManager.GetCPUHandle(cbvIndex));
+            resManager.SetCSUIndex(allocIndex, cbvIndex);
+
+            //if (pInitData != nullptr)
+            //{
+            //    void* cbvDataPtr;
+            //    D3D12_RANGE readRange{ 0, 0 };
+            //    ThrowIfFailed(resource->Map(0, &readRange, reinterpret_cast<void**>(&cbvDataPtr)));
+            //    memcpy(cbvDataPtr, &pInitData, sizeof(nByteSize));
+            //    //resource->Unmap(0, &readRange);
+            //}
+        }
         
         return allocIndex;
+    }
+
+    void hwrtl::UpdateConstantBuffer(SResourceHandle resourceHandle, uint64_t nByteSize, const void* pData)
+    {
+        ID3D12ResourcePtr& resource = pDXDevice->m_resouManager.GetResource(resourceHandle);
+        void* cbvDataPtr;
+        D3D12_RANGE readRange{ 0, 0 };
+        ThrowIfFailed(resource->Map(0, &readRange, reinterpret_cast<void**>(&cbvDataPtr)));
+        memcpy(cbvDataPtr, &pData, sizeof(nByteSize));
+        resource->Unmap(0, nullptr);
     }
 
     void hwrtl::SubmitCommandlist()
@@ -1275,6 +1321,8 @@ namespace hwrtl
         pCmdList->Close();
         ID3D12CommandList* pGraphicsList = pCmdList.GetInterfacePtr();
         pCmdQueue->ExecuteCommandLists(1, &pGraphicsList);
+
+        pDXDevice->m_resouceBarriers.clear();
     }
 
     void hwrtl::SetShaderResource(SResourceHandle resource, ESlotType slotType, uint32_t bindIndex)
@@ -1520,12 +1568,52 @@ namespace hwrtl
         }
     }
 
+    void hwrtl::WaitForPreviousFrame()
+    {
+        const UINT64 nFenceValue = pDXDevice->m_nFenceValue;
+        ThrowIfFailed(pDXDevice->m_pCmdQueue->Signal(pDXDevice->m_pFence, nFenceValue));
+        pDXDevice->m_nFenceValue++;
+
+        // Wait until the previous frame is finished.
+        if (pDXDevice->m_pFence->GetCompletedValue() < nFenceValue)
+        {
+            ThrowIfFailed(pDXDevice->m_pFence->SetEventOnCompletion(nFenceValue, pDXDevice->m_FenceEvent));
+            WaitForSingleObject(pDXDevice->m_FenceEvent, INFINITE);
+        }
+    }
+
+    void hwrtl::ResetCmdList()
+    {
+        auto pCommandList = pDXDevice->m_pCmdList;
+        auto pCmdAllocator = pDXDevice->m_pCmdAllocator;
+        // Command list allocators can only be reset when the associated 
+        // command lists have finished execution on the GPU; apps should use 
+        // fences to determine GPU execution progress.
+        ThrowIfFailed(pCmdAllocator->Reset());
+
+        // However, when ExecuteCommandList() is called on a particular command 
+        // list, that command list can then be reset at any time and must be before 
+        // re-recording.
+        ThrowIfFailed(pCommandList->Reset(pCmdAllocator, pDXRasterization->m_pRSPipelinState));
+    }
+
     void hwrtl::BeginRasterization()
     {
         auto pCommandList = pDXDevice->m_pCmdList;
 
         ID3D12DescriptorHeap* ppHeaps[] = { pDXDevice->m_csuDescManager.GetHeap()};
         pCommandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+        pCommandList->SetGraphicsRootSignature(pDXRasterization->m_pRsGlobalRootSig);
+    }
+
+    void hwrtl::SetConstantBuffer(SResourceHandle cbHandle)
+    {
+        auto pCommandList = pDXDevice->m_pCmdList;
+
+        uint32_t cbvIndex = pDXDevice->m_resouManager.GetCSUIndex(cbHandle);
+       
+        //temporary code
+        pCommandList->SetGraphicsRootDescriptorTable(0, pDXDevice->m_csuDescManager.GetGPUHandle(cbvIndex));
     }
 
     void hwrtl::SetRenderTargets(SResourceHandle* renderTargets,uint32_t renderTargetNum, SResourceHandle depthStencil, bool bClearRT, bool bClearDs)
@@ -1548,6 +1636,12 @@ namespace hwrtl
             pDXDevice->m_resouceBarriers.push_back(barrier);
         }
         pDXRasterization->m_nRenderTargetNum = renderTargetNum;
+
+        auto pCommandList = pDXDevice->m_pCmdList;
+        if (pDXDevice->m_resouceBarriers.size() > 0)
+        {
+            pCommandList->ResourceBarrier(pDXDevice->m_resouceBarriers.size(), pDXDevice->m_resouceBarriers.data());
+        }
     }
 
     void hwrtl::SetViewport(float width, float height)
@@ -1569,15 +1663,9 @@ namespace hwrtl
     void hwrtl::DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation)
     {
         auto pCommandList = pDXDevice->m_pCmdList;
-        
-        pCommandList->SetGraphicsRootSignature(pDXRasterization->m_pRsGlobalRootSig);
+       
         pCommandList->RSSetViewports(1, &pDXRasterization->m_viewPort);
         pCommandList->RSSetScissorRects(1, &pDXRasterization->m_scissorRect);
-
-        if (pDXDevice->m_resouceBarriers.size() > 0)
-        {
-            pCommandList->ResourceBarrier(pDXDevice->m_resouceBarriers.size(), pDXDevice->m_resouceBarriers.data());
-        }
 
         pCommandList->OMSetRenderTargets(pDXRasterization->m_nRenderTargetNum, pDXRasterization->m_renderTargetHandles, FALSE, nullptr);
 

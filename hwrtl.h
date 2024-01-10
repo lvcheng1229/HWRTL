@@ -194,9 +194,9 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 
 	enum class EBufferUsage
 	{
-		USAGE_VB = 1 << 1, // vertex buffer
-		USAGE_IB = 1 << 2, // index buffer
-		USAGE_CB = 1 << 3, // constant buffer
+		USAGE_VB = 0, // vertex buffer
+		USAGE_IB, // index buffer
+		USAGE_CB, // constant buffer
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(EBufferUsage);
 
@@ -279,6 +279,7 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 
 	SResourceHandle CreateTexture2D(STextureCreateDesc texCreateDesc);
 	SResourceHandle CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage);
+	void UpdateConstantBuffer(SResourceHandle resourceHandle, uint64_t nByteSize, const void* pData);
 	void SubmitCommand();
 
 	// ray tracing pipeline
@@ -295,8 +296,11 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	void AddRasterizationMeshs(const SMeshInstancesDesc& meshDescs);
 	void CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats);
 
+	void WaitForPreviousFrame();
+	void ResetCmdList();
 	void BeginRasterization();
 	void SetRenderTargets(SResourceHandle* renderTargets, uint32_t renderTargetNum, SResourceHandle depthStencil = -1, bool bClearRT = true, bool bClearDs = true);
+	void SetConstantBuffer(SResourceHandle cbHandle);
 	void SetViewport(float width, float height);
 	void SetVertexBuffers(SResourceHandle* vertexBuffer, uint32_t slotNum = 1);
 	void DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation);
