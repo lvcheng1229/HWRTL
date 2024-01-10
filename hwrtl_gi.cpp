@@ -417,6 +417,9 @@ namespace gi
         SBakeConfig m_bakeConfig;
         Vec2i m_nAtlasSize;
         uint32_t m_nAtlasNum;
+
+        std::shared_ptr<CGraphicsPipelineState>m_pLightMapGBufferPSO;
+        std::shared_ptr<CGraphicsPipelineState>m_pVisualizeGIPSO;
 	};
 
 	static CGIBaker* pGiBaker = nullptr;
@@ -643,7 +646,7 @@ namespace gi
         rtFormats.push_back(ETexFormat::FT_RGBA32_FLOAT);
         rtFormats.push_back(ETexFormat::FT_RGBA32_FLOAT);
 
-        CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources, vertexLayouts, rtFormats);
+        pGiBaker->m_pLightMapGBufferPSO = CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources, vertexLayouts, rtFormats);
     }
 
 	void hwrtl::gi::PrePareLightMapGBufferPass()
@@ -653,13 +656,8 @@ namespace gi
         GenerateAtlas();
 	}
 
-	void hwrtl::gi::GenerateLightMapGBuffer()
+	void hwrtl::gi::ExecuteLightMapGBufferPass()
 	{
-        SubmitCommandlist();
-        WaitForPreviousFrame();
-        ResetCmdList();
-
-
         for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
         {
             SAtlas& atlas = pGiBaker->m_atlas[index];
@@ -669,7 +667,11 @@ namespace gi
 
             SResourceHandle resouceHandles[2] = { posTex ,normTex };
 
-            BeginRasterization(); 
+            SubmitCommandlist();
+            WaitForPreviousFrame();
+            ResetCmdList();
+
+            BeginRasterization(pGiBaker->m_pLightMapGBufferPSO);
             SetRenderTargets(resouceHandles, 2, -1, true, true);
             SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
@@ -701,19 +703,86 @@ namespace gi
                     }
                     gBufferCbData.lightMapScaleAndBias = giMesh.m_lightMapScaleAndBias;
                     giMesh.m_hConstantBuffer = CreateBuffer(&gBufferCbData, sizeof(SGbufferGenCB), sizeof(SGbufferGenCB), EBufferUsage::USAGE_CB);
-                    SetConstantBuffer(giMesh.m_hConstantBuffer);
+                    SetConstantBuffer(giMesh.m_hConstantBuffer,0);
                 }
-
 
                 SetVertexBuffers(vbHandles, 2);
                 DrawInstanced(giMesh.vertexCount, 1, 0, 0);
                 
             }
-            SubmitCommandlist();
-            WaitForPreviousFrame();
-            ResetCmdList();
         }
+
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
 	}
+
+    void hwrtl::gi::PrePareVisualizeResultPass()
+    {
+        std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_gi.cpp");
+        std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
+
+        std::vector<SShader>rsShaders;
+        rsShaders.push_back(SShader{ ERayShaderType::RS_VS,L"VisualizeGIResultVS" });
+        rsShaders.push_back(SShader{ ERayShaderType::RS_PS,L"VisualizeGIResultPS" });
+
+        SShaderResources rasterizationResources = { 0,0,2,0 };
+
+        std::vector<EVertexFormat>vertexLayouts;
+        vertexLayouts.push_back(EVertexFormat::FT_FLOAT3);
+        vertexLayouts.push_back(EVertexFormat::FT_FLOAT2);
+
+        std::vector<ETexFormat>rtFormats;
+        rtFormats.push_back(ETexFormat::FT_RGBA32_FLOAT);
+
+        pGiBaker->m_pVisualizeGIPSO = CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources, vertexLayouts, rtFormats);
+    }
+
+    void hwrtl::gi::ExecuteVisualizeResultPass()
+    {
+        Vec2i visualTex(1024,1024);
+        STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_SRV | ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,visualTex.x,visualTex.y };
+        SResourceHandle resouceHandle = CreateTexture2D(texCreateDesc);
+
+        Vec3 eyePosition = Vec3(0, -6, 3);
+        Vec3 eyeDirection = Vec3(0, -1, 0);
+        Vec3 upDirection = Vec3(0, 0, 1);
+
+        struct SViewCB
+        {
+            Matrix44 vpMat;
+            float padding[48];
+        }viewCB;
+        static_assert(sizeof(SViewCB) == 256, "sizeof(SViewCB) == 256");
+
+        float fovAngleY = 90;
+        float aspectRatio = float(visualTex.y) / float(visualTex.x);
+        viewCB.vpMat = GetViewProjectionMatrixRightHand(eyePosition, eyeDirection, upDirection, fovAngleY, aspectRatio, 0.1, 100.0).GetTrasnpose();
+
+        BeginRasterization(pGiBaker->m_pVisualizeGIPSO);
+        SetRenderTargets(&resouceHandle, 1, -1, true, true);
+        SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
+
+        SResourceHandle hViewCB = CreateBuffer(&viewCB, sizeof(SViewCB), sizeof(SViewCB), EBufferUsage::USAGE_CB);
+        SetConstantBuffer(hViewCB, 1);
+
+        for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
+        {
+            SAtlas& atlas = pGiBaker->m_atlas[index];
+            for (uint32_t geoIndex = 0; geoIndex < atlas.m_atlasGeometries.size(); geoIndex++)
+            {
+                SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
+                SetConstantBuffer(giMesh.m_hConstantBuffer,0);
+                SResourceHandle vbHandles[2] = { giMesh.m_hPositionBuffer,giMesh.m_hLightMapUVBuffer };
+                SetVertexBuffers(vbHandles, 2);
+                DrawInstanced(giMesh.vertexCount, 1, 0, 0);
+            }
+        }
+
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
+    }
 
 	void hwrtl::gi::DeleteGIBaker()
 	{

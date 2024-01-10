@@ -71,3 +71,52 @@ SLightMapGBufferOutput LightMapGBufferGenPS(SGeometryVS2PS IN)
     output.worldFaceNormal = float4(-faceNormal, texelSize);
     return output;
 }
+
+
+
+
+struct SVisualizeGeometryApp2VS
+{
+	float3 posistion    : TEXCOORD0;
+	float2 lightmapuv   : TEXCOORD1;
+};
+
+struct SVisualizeGeometryVS2PS
+{
+  float4 position : SV_POSITION;
+  float2 lightMapUV :TEXCOORD0;
+};
+
+cbuffer CVisualizeGeomConstantBuffer : register(b0)
+{
+    float4x4 vis_worldTM;
+    float4   vis_lightMapScaleAndBias;
+    float vis_geoPadding[44];
+};
+
+cbuffer CVisualizeViewConstantBuffer : register(b1)
+{
+    float4x4 vis_vpMat;
+    float vis_viewPadding[48];
+};
+
+struct SVisualizeGIResult
+{
+    float4 giResult :SV_Target0;
+};
+
+SVisualizeGeometryVS2PS VisualizeGIResultVS(SVisualizeGeometryApp2VS IN )
+{
+    SVisualizeGeometryVS2PS vs2PS = (SVisualizeGeometryVS2PS) 0;
+    vs2PS.lightMapUV = IN.lightmapuv * vis_lightMapScaleAndBias.xy + vis_lightMapScaleAndBias.zw;
+    float4 worldPosition = mul(vis_worldTM, float4(IN.posistion,1.0));
+    vs2PS.position = mul(vis_vpMat,worldPosition);
+    return vs2PS;
+}
+
+SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
+{
+    SVisualizeGIResult output;
+    output.giResult = float4(IN.lightMapUV,0.0,1.0);
+    return output;
+}

@@ -71,6 +71,36 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 			}
 		}
 
+		inline T operator[](uint32_t index) const
+		{
+			return (((T*)this)[index]);
+		}
+
+		inline R operator-() const
+		{
+			R r;
+			for (int i = 0; i < N; ++i)
+				((T*)&r)[i] = -((T*)this)[i];
+			return r;
+		}
+
+		inline R operator*(T s) const
+		{
+			R r;
+			for (int i = 0; i < N; ++i)
+				((T*)&r)[i] = ((T*)this)[i] * s;
+			return r;
+		}
+
+		template<typename T2, typename R2>
+		inline T Dot(const TVecN<T2, N, R2>& o) const
+		{
+			T s = ((T*)this)[0] * o[0];
+			for (int i = 1; i < N; ++i)
+				s = s + (((T*)this)[i] * o[i]);
+			return s;
+		}
+
 		template<typename T2, typename R2>
 		inline void Set(const TVecN<T2, N,R2>& o)
 		{
@@ -131,6 +161,106 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 
 	using Vec4 = TVec4<float>;
 	using Vec4i = TVec4<int>;
+
+	inline Vec3 NormalizeVec3(Vec3 vec)
+	{
+		float lenght = sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
+		if (lenght > 0.0)
+		{
+			lenght = 1.0 / lenght;
+		}
+		return Vec3(vec.x, vec.y, vec.z) * lenght;
+	}
+
+	inline Vec3 CrossVec3(Vec3 A, Vec3 B)
+	{
+		return Vec3(A.y * B.z - A.z * B.y, A.z * B.x - A.x * B.z, A.x * B.y - A.y * B.x);
+	}
+
+	struct Matrix44
+	{
+		union
+		{
+			float m[4][4];
+			Vec4 row[4];
+		};
+
+		Matrix44()
+		{
+			for (uint32_t i = 0; i < 4; i++)
+				for (uint32_t j = 0; j < 4; j++)
+					m[i][j] = 0;
+		}
+
+		inline void SetIdentity()
+		{
+			row[0] = Vec4(1, 0, 0, 0);
+			row[1] = Vec4(0, 1, 0, 0);
+			row[2] = Vec4(0, 0, 1, 0);
+			row[3] = Vec4(0, 0, 0, 1);
+		}
+
+		inline Matrix44 GetTrasnpose()
+		{
+			Matrix44 C;
+			for (uint32_t i = 0; i < 4; i++)
+				for (uint32_t j = 0; j < 4; j++)
+					C.m[i][j] = m[j][i];
+			return C;
+		}
+	};
+
+	inline Matrix44 MatrixMulti(Matrix44 A, Matrix44 B)
+	{
+		Matrix44 C;
+		for (uint32_t i = 0; i < 4; i++)
+		{
+			for (uint32_t j = 0; j < 4; j++)
+			{
+				C.m[i][j] = A.row[i].Dot(Vec4(A.m[0][j], A.m[0][j], A.m[0][j], A.m[0][j]));
+			}
+		}
+		return C;
+	}
+
+	inline Matrix44 GetViewProjectionMatrixRightHand(Vec3 eyePosition, Vec3 eyeDirection, Vec3 upDirection, float fovAngleY, float aspectRatio, float nearZ, float farZ)
+	{
+		Vec3 yAxis = NormalizeVec3(-eyeDirection);
+		Vec3 xAxis = NormalizeVec3(CrossVec3(yAxis,upDirection));
+		Vec3 zAxis = CrossVec3(xAxis, yAxis);
+
+		Vec3 negEye = -eyePosition;
+
+		Matrix44 camTranslate;
+		camTranslate.SetIdentity();
+		camTranslate.m[0][3] = negEye.x;
+		camTranslate.m[1][3] = negEye.y;
+		camTranslate.m[2][3] = negEye.z;
+
+		Matrix44 camRotate;
+		camRotate.row[0] = Vec4(xAxis.x, xAxis.y, xAxis.z, 0);
+		camRotate.row[1] = Vec4(yAxis.x, yAxis.y, yAxis.z, 0);
+		camRotate.row[2] = Vec4(zAxis.x, zAxis.y, zAxis.z, 0);
+		camRotate.row[3] = Vec4(0, 0, 0, 1);
+
+		Matrix44 viewMat = MatrixMulti(camRotate, camTranslate);
+
+		float radians = 0.5f * fovAngleY * 3.1415926535f / 180.0f;
+		float sinFov = std::sin(radians);
+		float cosFov = std::cos(radians);
+
+		float Height = cosFov / sinFov;
+		float Width = Height / aspectRatio;
+		float fRange = farZ / (nearZ - farZ);
+
+		Matrix44 projMat;
+		projMat.m[0][0] = Width;
+		projMat.m[1][1] = Height;
+		projMat.m[2][2] = fRange;
+		projMat.m[2][3] = -1.0f;
+		projMat.m[3][2] = fRange * nearZ;
+		return MatrixMulti(projMat, viewMat);
+	}
 
 	using WstringConverter = std::wstring_convert<std::codecvt_utf8<wchar_t>>;
 	using SResourceHandle = int;
@@ -275,6 +405,8 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		}
 	};
 
+	class CGraphicsPipelineState {};
+
 	void Init();
 
 	SResourceHandle CreateTexture2D(STextureCreateDesc texCreateDesc);
@@ -294,13 +426,13 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 
 	//rasterization pipeline
 	void AddRasterizationMeshs(const SMeshInstancesDesc& meshDescs);
-	void CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats);
+	std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats);
 
 	void WaitForPreviousFrame();
 	void ResetCmdList();
-	void BeginRasterization();
+	void BeginRasterization(std::shared_ptr<CGraphicsPipelineState> graphicsPipelineStata);
 	void SetRenderTargets(SResourceHandle* renderTargets, uint32_t renderTargetNum, SResourceHandle depthStencil = -1, bool bClearRT = true, bool bClearDs = true);
-	void SetConstantBuffer(SResourceHandle cbHandle);
+	void SetConstantBuffer(SResourceHandle cbHandle, uint32_t offset);
 	void SetViewport(float width, float height);
 	void SetVertexBuffers(SResourceHandle* vertexBuffer, uint32_t slotNum = 1);
 	void DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation);

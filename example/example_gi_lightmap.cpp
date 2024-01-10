@@ -161,7 +161,9 @@ int main()
         InitGIBaker(bakeConfig);
         AddBakeMeshs(bakeMeshDescs);
         PrePareLightMapGBufferPass();
-        GenerateLightMapGBuffer();
+        ExecuteLightMapGBufferPass();
+        PrePareVisualizeResultPass();
+        ExecuteVisualizeResultPass();
         DeleteGIBaker();
     }
     _CrtDumpMemoryLeaks();
