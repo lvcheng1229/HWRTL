@@ -42,7 +42,9 @@ SOFTWARE.
 //      9. split root parameter table to 4 tables
 //      10. d3d view abstraction
 //      11. release temporary upload buffer
-//
+//      12. reset command list
+//      13. ERayShaderType to ERayShaderType and EShaderType
+//      14. SetShaderResource support raster rization
 
 
 #include "HWRTL.h"
@@ -408,6 +410,26 @@ namespace hwrtl
         }
     };
 
+    struct SRayTracingInitDesc
+    {
+        uint32_t m_nShaderNum[4];
+    };
+
+    class CDxRayTracingPipelineState : public CRayTracingPipelineState
+    {
+    public:
+
+        uint32_t m_nShaderNum[4];
+
+        CDxRayTracingPipelineState(SRayTracingInitDesc rtInitDesc)
+        {
+            m_nShaderNum[0] = rtInitDesc.m_nShaderNum[0];
+            m_nShaderNum[1] = rtInitDesc.m_nShaderNum[1];
+            m_nShaderNum[2] = rtInitDesc.m_nShaderNum[2];
+            m_nShaderNum[3] = rtInitDesc.m_nShaderNum[3];
+        }
+    };
+
     class CDXDevice
     {
     public:
@@ -570,13 +592,14 @@ namespace hwrtl
 
         std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
         
+        std::vector<ID3D12ResourcePtr>m_pBLASs;
+
         CDXDescManager m_rtDescManager;
 
         ID3D12ResourcePtr m_ptlas;
-        ID3D12ResourcePtr m_pblas;
 
         SShaderResources m_rtResouces;
-        uint32_t m_preSum[4];
+        uint32_t m_rangeIndex[4];
 
 #if ENABLE_PIX_FRAME_CAPTURE
         HMODULE m_pixModule;
@@ -830,55 +853,73 @@ namespace hwrtl
     }
 
     // build bottom level acceleration structure
-    SDXAccelerationStructureBuffers BuildBottomLevelAccelerationStructure()
+    void BuildBottomLevelAccelerationStructure()
     {
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
         ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+        ID3D12CommandAllocatorPtr pCmdAlloc = pDXDevice->m_pCmdAllocator;
+        ThrowIfFailed(pCmdList->Reset(pCmdAlloc, nullptr));
 
         const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pDXRayTracing->m_dxMeshInstanceInfos;
-        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geomDesc;
-        geomDesc.resize(dxMeshInstanceInfos.size());
+        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geomDescs ;
+        std::vector<ID3D12ResourcePtr>pScratchSource;
+        std::vector<ID3D12ResourcePtr>pResultSource;
+        std::vector<D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC>buildDescs;
 
         for (uint32_t i = 0; i < dxMeshInstanceInfos.size(); i++)
         {
+            D3D12_RAYTRACING_GEOMETRY_DESC geomDesc = {};
             const SDXMeshInstanceInfo& dxMeshInstanceInfo = dxMeshInstanceInfos[i];
-            geomDesc[i].Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-            geomDesc[i].Triangles.VertexBuffer.StartAddress = dxMeshInstanceInfo.m_pPositionBuffer->GetGPUVirtualAddress();
-            geomDesc[i].Triangles.VertexBuffer.StrideInBytes = sizeof(Vec3);
-            geomDesc[i].Triangles.VertexCount = dxMeshInstanceInfo.m_nVertexCount;
-            geomDesc[i].Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-            geomDesc[i].Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+            geomDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+            geomDesc.Triangles.VertexBuffer.StartAddress = dxMeshInstanceInfo.m_pPositionBuffer->GetGPUVirtualAddress();
+            geomDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(Vec3);
+            geomDesc.Triangles.VertexCount = dxMeshInstanceInfo.m_nVertexCount;
+            geomDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+            geomDesc.Triangles.IndexCount = 0;
+            geomDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+
+            geomDescs.push_back(geomDesc);
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
+            inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+            inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+            inputs.NumDescs = 1;
+            inputs.pGeometryDescs = &geomDescs[i];
+            inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info;
+            pDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
+
+            ID3D12ResourcePtr pScratch = DXCreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
+            ID3D12ResourcePtr pResult = DXCreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
+
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
+            asDesc.Inputs = inputs;
+            asDesc.DestAccelerationStructureData = pResult->GetGPUVirtualAddress();
+            asDesc.ScratchAccelerationStructureData = pScratch->GetGPUVirtualAddress();
+
+            buildDescs.push_back(asDesc);
+            pDXRayTracing->m_pBLASs.push_back(pResult);
+            pScratchSource.push_back(pScratch);
+            pResultSource.push_back(pResult);
+
+            pCmdList->BuildRaytracingAccelerationStructure(&buildDescs[i], 0, nullptr);
         }
 
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
-        inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-        inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-        inputs.NumDescs = dxMeshInstanceInfos.size();
-        inputs.pGeometryDescs = geomDesc.data();
-        inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+        std::vector<D3D12_RESOURCE_BARRIER>uavBarriers;
+        uavBarriers.resize(pDXRayTracing->m_pBLASs.size());
+        for (uint32_t index = 0; index < pDXRayTracing->m_pBLASs.size(); index++)
+        {
+            D3D12_RESOURCE_BARRIER uavBarrier = {};
+            uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            uavBarrier.UAV.pResource = pDXRayTracing->m_pBLASs[index];
+            uavBarriers[index] = uavBarrier;
+        }
+        
+        pCmdList->ResourceBarrier(uavBarriers.size(), uavBarriers.data());
 
-        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info;
-        pDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
-
-        ID3D12ResourcePtr pScratch = DXCreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
-        ID3D12ResourcePtr pResult = DXCreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
-
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
-        asDesc.Inputs = inputs;
-        asDesc.DestAccelerationStructureData = pResult->GetGPUVirtualAddress();
-        asDesc.ScratchAccelerationStructureData = pScratch->GetGPUVirtualAddress();
-
-        pCmdList->BuildRaytracingAccelerationStructure(&asDesc, 0, nullptr);
-
-        D3D12_RESOURCE_BARRIER uavBarrier = {};
-        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        uavBarrier.UAV.pResource = pResult;
-        pCmdList->ResourceBarrier(1, &uavBarrier);
-
-        SDXAccelerationStructureBuffers resultBuffers;
-        resultBuffers.pResult = pResult;
-        resultBuffers.pScratch = pScratch;
-        return resultBuffers;
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
     }
 
     D3D12_RAYTRACING_INSTANCE_FLAGS ConvertToDXInstanceFlag(EInstanceFlag instanceFlag)
@@ -894,10 +935,12 @@ namespace hwrtl
         }
     }
 
-    SDXAccelerationStructureBuffers BuildTopLevelAccelerationStructure(ID3D12ResourcePtr pBottomLevelAS)
+    SDXAccelerationStructureBuffers BuildTopLevelAccelerationStructure()
     {
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
         ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+        ID3D12CommandAllocatorPtr pCmdAlloc = pDXDevice->m_pCmdAllocator;
+        ThrowIfFailed(pCmdList->Reset(pCmdAlloc, nullptr));
 
         uint32_t totalInstanceNum = 0;
         const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pDXRayTracing->m_dxMeshInstanceInfos;
@@ -924,12 +967,17 @@ namespace hwrtl
         {
             for (uint32_t indexInstance = 0; indexInstance < dxMeshInstanceInfos[indexMesh].instanes.size(); indexInstance++)
             {
+                assert(dxMeshInstanceInfos[indexMesh].instanes.size() == 1);//TODO:
+
                 const SMeshInstanceInfo& meshInstanceInfo = dxMeshInstanceInfos[indexMesh].instanes[indexInstance];
                 instanceDescs[indexMesh].InstanceID = 0;                            // This value will be exposed to the shader via InstanceID()
                 instanceDescs[indexMesh].InstanceContributionToHitGroupIndex = 0;   // This is the offset inside the shader-table. We only have a single geometry, so the offset 0
                 instanceDescs[indexMesh].Flags = ConvertToDXInstanceFlag(meshInstanceInfo.m_instanceFlag);
                 memcpy(instanceDescs[indexMesh].Transform, &meshInstanceInfo.m_transform, sizeof(instanceDescs[indexMesh].Transform));
-                instanceDescs[indexMesh].AccelerationStructure = pBottomLevelAS->GetGPUVirtualAddress();
+                
+                //TODO:
+                instanceDescs[indexMesh].AccelerationStructure = pDXRayTracing->m_pBLASs[indexMesh]->GetGPUVirtualAddress();
+                
                 instanceDescs[indexMesh].InstanceMask = 0xFF;
             }
         }
@@ -953,18 +1001,25 @@ namespace hwrtl
         resultBuffers.pResult = pResult;
         resultBuffers.pScratch = pScratch;
         resultBuffers.pInstanceDesc = pInstanceDescBuffer;
+
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
+
         return resultBuffers;
     }
 
 
     void hwrtl::BuildAccelerationStructure()
     {
-        SDXAccelerationStructureBuffers bottomLevelBuffers = BuildBottomLevelAccelerationStructure();
-        SDXAccelerationStructureBuffers topLevelBuffers = BuildTopLevelAccelerationStructure(bottomLevelBuffers.pResult);
-        pDXRayTracing->m_pblas = bottomLevelBuffers.pResult;
-        pDXRayTracing->m_ptlas = topLevelBuffers.pResult;
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
         
-        //SubmitCommandList();
+
+        BuildBottomLevelAccelerationStructure();
+        SDXAccelerationStructureBuffers topLevelBuffers = BuildTopLevelAccelerationStructure();
+        pDXRayTracing->m_ptlas = topLevelBuffers.pResult;
+
+        
     }
 
     IDxcBlobPtr CompileLibraryDXC(const std::wstring& shaderPath, LPCWSTR pEntryPoint, LPCWSTR pTargetProfile)
@@ -1130,18 +1185,22 @@ namespace hwrtl
         D3D12_STATE_SUBOBJECT m_subobject = {};
     };
 
-    void hwrtl::CreateRTPipelineStateAndShaderTable(const std::wstring shaderPath,
+    std::shared_ptr<CRayTracingPipelineState> hwrtl::CreateRTPipelineStateAndShaderTable(const std::wstring shaderPath,
         std::vector<SShader>rtShaders,
         uint32_t maxTraceRecursionDepth,
         SShaderResources rayTracingResources)
     {
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+        ID3D12CommandAllocatorPtr pCmdAlloc = pDXDevice->m_pCmdAllocator;
+        ThrowIfFailed(pCmdList->Reset(pCmdAlloc, nullptr));
+
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
         pDXRayTracing->m_rtResouces = rayTracingResources;
 
-        pDXRayTracing->m_preSum[0] = 0;
+        pDXRayTracing->m_rangeIndex[0] = 0;
         for (uint32_t index = 1; index < 4; index++)
         {
-            pDXRayTracing->m_preSum[index] = pDXRayTracing->m_preSum[index - 1] + pDXRayTracing->m_rtResouces[index];
+            pDXRayTracing->m_rangeIndex[index] = pDXRayTracing->m_rangeIndex[index - 1] + pDXRayTracing->m_rtResouces[index - 1];
         }
 
         std::vector<LPCWSTR>pEntryPoint;
@@ -1220,6 +1279,8 @@ namespace hwrtl
 
         // global root signature
         SGlobalRootSignature globalRootSignature;
+        //TODO:
+        uint32_t totalIndex = 0;
         {
             std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
             for (uint32_t descRangeIndex = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; descRangeIndex <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; descRangeIndex++)
@@ -1230,8 +1291,9 @@ namespace hwrtl
                     descRange.BaseShaderRegister = 0;
                     descRange.NumDescriptors = rayTracingResources[descRangeIndex];
                     descRange.RegisterSpace = 0;
-                    descRange.OffsetInDescriptorsFromTableStart = descRangeIndex;
+                    descRange.OffsetInDescriptorsFromTableStart = totalIndex;
                     descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(descRangeIndex);
+                    totalIndex += rayTracingResources[descRangeIndex];
                     descRanges.emplace_back(descRange);
                 }
             }
@@ -1261,6 +1323,7 @@ namespace hwrtl
         
         ThrowIfFailed(pDevice->CreateStateObject(&desc, IID_PPV_ARGS(&pDXRayTracing->m_pRtPipelineState)));
 
+        SRayTracingInitDesc rtInitDesc = { {0,0,0,0} };
 
         // create shader table
         uint32_t shaderTableSize = ShaderTableEntrySize * rtShaders.size();
@@ -1289,9 +1352,17 @@ namespace hwrtl
 
             D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = pDXRayTracing->m_rtDescManager.GetGPUHandle(0);
             memcpy(shaderTableData.data() + index * ShaderTableEntrySize + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, &gpuHandle, sizeof(D3D12_GPU_DESCRIPTOR_HANDLE));
+            
+            rtInitDesc.m_nShaderNum[uint32_t(rtShader.m_eShaderType)]++;
         }
 
         pDXRayTracing->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pDXDevice->m_tempBuffers.AllocResource());
+
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
+
+        return std::make_shared<CDxRayTracingPipelineState>(rtInitDesc);
     }
 
 #define CHECK_AND_ADD_FLAG(eTexUsage,eCheckUsage,eAddedFlag,nullFlag) (((uint32_t(eTexUsage) & uint32_t(eCheckUsage)) != 0) ? eAddedFlag : nullFlag)
@@ -1462,13 +1533,26 @@ namespace hwrtl
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
         auto pCommandList = pDXDevice->m_pCmdList;
         
+        //TODO: MoveToCreate Texture2D
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
         switch (slotType)
         {
         case ESlotType::ST_U:
-            D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
             uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = pDXRayTracing->m_rtDescManager.GetCPUHandle(bindIndex + pDXRayTracing->m_preSum[uint32_t(ESlotType::ST_U)]);
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = pDXRayTracing->m_rtDescManager.GetCPUHandle(bindIndex + pDXRayTracing->m_rangeIndex[uint32_t(ESlotType::ST_U)]);
             pDevice->CreateUnorderedAccessView(pResouce, nullptr, &uavDesc, cpuHandle);
+            break;
+        case ESlotType::ST_T:
+            //TODO: MoveToCreate Texture2D
+            UINT destStart = bindIndex + pDXRayTracing->m_rangeIndex[uint32_t(ESlotType::ST_T)];
+        
+            D3D12_CPU_DESCRIPTOR_HANDLE destPos = pDXRayTracing->m_rtDescManager.GetCPUHandle(bindIndex);
+            uint32_t indexHandle = pDXDevice->m_resouManager.GetCSUIndex(resource);
+            D3D12_CPU_DESCRIPTOR_HANDLE srcHandle = pDXDevice->m_csuDescManager.GetCPUHandle(indexHandle);
+            
+            UINT destRangeSize = 1;
+            pDXDevice->m_pDevice->CopyDescriptors(1, &destPos, &destRangeSize, 1, &srcHandle, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        
             break;
         }
         
@@ -1479,7 +1563,7 @@ namespace hwrtl
             stateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
             break;
         case ESlotType::ST_T:
-            stateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            stateAfter = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
             break;
         }
 
@@ -1504,20 +1588,26 @@ namespace hwrtl
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.RaytracingAccelerationStructure.Location = pDXRayTracing->m_ptlas->GetGPUVirtualAddress();
-        pDevice->CreateShaderResourceView(nullptr, &srvDesc, pDXRayTracing->m_rtDescManager.GetCPUHandle(bindIndex + pDXRayTracing->m_preSum[uint32_t(ESlotType::ST_T)]));
+        pDevice->CreateShaderResourceView(nullptr, &srvDesc, pDXRayTracing->m_rtDescManager.GetCPUHandle(bindIndex + pDXRayTracing->m_rangeIndex[uint32_t(ESlotType::ST_T)]));
         ValidateResource();
     }
 
     void hwrtl::BeginRayTracing()
     {
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+        ID3D12CommandAllocatorPtr pCmdAlloc = pDXDevice->m_pCmdAllocator;
+        ThrowIfFailed(pCmdList->Reset(pCmdAlloc, nullptr));
+
         ID3D12DescriptorHeap* heaps[] = { pDXRayTracing->m_rtDescManager.GetHeap()};
         pDXDevice->m_pCmdList->SetDescriptorHeaps(1, heaps);
     }
 
-    void hwrtl::DispatchRayTracicing(uint32_t width, uint32_t height)
+    void hwrtl::DispatchRayTracicing(std::shared_ptr<CRayTracingPipelineState>rtPipelineState, uint32_t width, uint32_t height)
     {
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
         ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+
+        CDxRayTracingPipelineState* dxRtPipelineState = static_cast<CDxRayTracingPipelineState*>(rtPipelineState.get());
 
         D3D12_DISPATCH_RAYS_DESC raytraceDesc = {};
         raytraceDesc.Width = width;
@@ -1528,17 +1618,26 @@ namespace hwrtl
         raytraceDesc.RayGenerationShaderRecord.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + 0 * ShaderTableEntrySize;
         raytraceDesc.RayGenerationShaderRecord.SizeInBytes = ShaderTableEntrySize;
 
-        // Miss is the second entry in the shader-table
-        size_t missOffset = 1 * ShaderTableEntrySize;
-        raytraceDesc.MissShaderTable.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + missOffset;
-        raytraceDesc.MissShaderTable.StrideInBytes = ShaderTableEntrySize;
-        raytraceDesc.MissShaderTable.SizeInBytes = ShaderTableEntrySize;   // Only a s single miss-entry
+        uint32_t offset = 1 * ShaderTableEntrySize;;
+        
+        uint32_t rMissShaderNum = dxRtPipelineState->m_nShaderNum[uint32_t(ERayShaderType::RAY_MIH)];
+        if (rMissShaderNum > 0)
+        {
+            raytraceDesc.MissShaderTable.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + offset;
+            raytraceDesc.MissShaderTable.StrideInBytes = ShaderTableEntrySize;
+            raytraceDesc.MissShaderTable.SizeInBytes = ShaderTableEntrySize * rMissShaderNum;   // Only a s single miss-entry
 
-        // Hit is the third entry in the shader-table
-        size_t hitOffset = 2 * ShaderTableEntrySize;
-        raytraceDesc.HitGroupTable.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + hitOffset;
-        raytraceDesc.HitGroupTable.StrideInBytes = ShaderTableEntrySize;
-        raytraceDesc.HitGroupTable.SizeInBytes = ShaderTableEntrySize; //todo: multipie number
+            offset += rMissShaderNum * ShaderTableEntrySize;
+        }
+
+        uint32_t rHitShaderNum = dxRtPipelineState->m_nShaderNum[uint32_t(ERayShaderType::RAY_AHS)] + dxRtPipelineState->m_nShaderNum[uint32_t(ERayShaderType::RAY_CHS)];
+
+        if (rHitShaderNum > 0)
+        {
+            raytraceDesc.HitGroupTable.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + offset;
+            raytraceDesc.HitGroupTable.StrideInBytes = ShaderTableEntrySize;
+            raytraceDesc.HitGroupTable.SizeInBytes = ShaderTableEntrySize * rHitShaderNum; //todo: multipie number
+        }
 
         pCmdList->SetComputeRootSignature(pDXRayTracing->m_pGlobalRootSig);
         pCmdList->SetComputeRootDescriptorTable(0, pDXRayTracing->m_rtDescManager.GetGPUHandle(0));
@@ -1729,8 +1828,6 @@ namespace hwrtl
         // re-recording.
         ThrowIfFailed(pCommandList->Reset(pCmdAllocator, dxGraphicsPipelineStata->m_pRSPipelinState));
 
-        ;
-
         ID3D12DescriptorHeap* ppHeaps[] = { pDXRasterization->m_graphicsContext.m_dxPassDescManager.GetHeapPtr() };
         pCommandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
         pCommandList->SetGraphicsRootSignature(dxGraphicsPipelineStata->m_pRsGlobalRootSig);
@@ -1738,6 +1835,8 @@ namespace hwrtl
 
     void hwrtl::SetTexture(SResourceHandle cbHandle, uint32_t offset)
     {
+        //see SetShaderResource
+
         //TODO
         //TransitionResource
         //CopyDescriptors

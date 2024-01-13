@@ -72,17 +72,71 @@ SLightMapGBufferOutput LightMapGBufferGenPS(SGeometryVS2PS IN)
     return output;
 }
 
-RaytracingAccelerationStructure gRtScene : register(t0);
-RWTexture2D<float4> gOutput : register(u0);
+#define RAY_TRACING_MASK_OPAQUE				0x01
+
+
+RaytracingAccelerationStructure rtScene : register(t0);
+Texture2D<float4> rtWorldPosition : register(t1);
+
+RWTexture2D<float4> rtOutput : register(u0);
+
+struct SHitPayload
+{
+    bool bHit;
+    float3 RetColor;
+};
+
+struct SRayTracingIntersectionAttributes
+{
+    float x;
+    float y;
+};
 
 [shader("raygeneration")]
 void LightMapRayTracingRayGen()
 {
-    uint3 launchIndex = DispatchRaysIndex();
-    gOutput[launchIndex.xy] = float4(1.0, 1.0, 0.0, 1.0);
+    const uint2 rayIndex = DispatchRaysIndex().xy;
+    float3 worldPosition = rtWorldPosition[rayIndex].xyz;
+    if (all(abs(worldPosition)) < 0.01)
+    {
+        rtOutput[rayIndex] = float4(0.0, 0.0, 1.0, 0.0);
+        return;
+    }
+    
+    RayDesc ray;
+    ray.Origin = worldPosition;
+    ray.Direction = float3(0, 0, 1);
+    ray.TMin = 0.01f;
+    ray.TMax = 10000.0;
+    
+    SHitPayload payload = (SHitPayload) 0;
+    TraceRay(
+		rtScene, // AccelerationStructure
+		RAY_FLAG_FORCE_OPAQUE,
+		RAY_TRACING_MASK_OPAQUE,
+		0, // RayContributionToHitGroupIndex
+		1, // MultiplierForGeometryContributionToShaderIndex
+		0, // MissShaderIndex
+		ray, // RayDesc
+		payload // Payload
+	);
+
+    rtOutput[rayIndex] = float4(payload.RetColor, 0.0);
 }
 
+[shader("closesthit")]
+void ClostHitMain(inout SHitPayload payload, in SRayTracingIntersectionAttributes attributes)
+{
+    payload.bHit = true;
+    payload.RetColor = float3(0.5, 0.0, 0.0);
+}
 
+[shader("miss")]
+void RayMiassMain(inout SHitPayload payload)
+{
+    payload.bHit = false;
+    payload.RetColor = float3(1.0, 0.0, 0.0);
+}
 
 struct SVisualizeGeometryApp2VS
 {
@@ -119,7 +173,7 @@ SVisualizeGeometryVS2PS VisualizeGIResultVS(SVisualizeGeometryApp2VS IN )
     SVisualizeGeometryVS2PS vs2PS = (SVisualizeGeometryVS2PS) 0;
     vs2PS.lightMapUV = IN.lightmapuv * vis_lightMapScaleAndBias.xy + vis_lightMapScaleAndBias.zw;
     float4 worldPosition = mul(vis_worldTM, float4(IN.posistion,1.0));
-    vs2PS.position = worldPosition;
+    vs2PS.position = mul(vis_vpMat, worldPosition);
     return vs2PS;
 }
 

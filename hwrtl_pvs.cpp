@@ -152,7 +152,7 @@ namespace pvs
 		BeginRayTracing();
 		SetShaderResource(bufferHandle, ESlotType::ST_U, 0);
 		SetTLAS(0);
-		DispatchRayTracicing(512,512);
+		//DispatchRayTracicing(512,512);
 		return CDynamicBitSet();
 	}
 

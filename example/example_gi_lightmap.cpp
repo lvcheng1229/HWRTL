@@ -126,30 +126,32 @@ int main()
         planeGeoPositions.resize(planeVertexCount);
         planeGeoLightMapUV.resize(planeVertexCount);
 
-        planeGeoPositions[0] = Vec3(-2, +2, -1); planeGeoLightMapUV[0] = Vec2(0.0, 0.0);
-        planeGeoPositions[1] = Vec3(+2, +2, -1); planeGeoLightMapUV[1] = Vec2(1.0, 0.0);
-        planeGeoPositions[2] = Vec3(+2, -2, -1); planeGeoLightMapUV[2] = Vec2(1.0, 1.0);
+        planeGeoPositions[0] = Vec3(-1, +1, -1); planeGeoLightMapUV[0] = Vec2(0.0, 0.0);
+        planeGeoPositions[1] = Vec3(+1, +1, -1); planeGeoLightMapUV[1] = Vec2(1.0, 0.0);
+        planeGeoPositions[2] = Vec3(+1, -1, -1); planeGeoLightMapUV[2] = Vec2(1.0, 1.0);
 
         planeGeoPositions[3] = planeGeoPositions[0]; planeGeoLightMapUV[3] = planeGeoLightMapUV[0];
         planeGeoPositions[4] = planeGeoPositions[2]; planeGeoLightMapUV[4] = planeGeoLightMapUV[2];
-        planeGeoPositions[5] = Vec3(-2, -2, -1); planeGeoLightMapUV[5] = Vec2(0.0, 1.0);
+        planeGeoPositions[5] = Vec3(-1, -1, -1); planeGeoLightMapUV[5] = Vec2(0.0, 1.0);
 
         SBakeMeshDesc boxMesh1Desc;
         boxMesh1Desc.m_pPositionData = boxGeoPositions.data();
         boxMesh1Desc.m_pLightMapUVData = boxGeoLightMapUV.data();
         boxMesh1Desc.m_nVertexCount = boxVertexCount;
         boxMesh1Desc.m_nLightMapSize = Vec2i(boxLightMapSizeX, boxLightMapSizeY);
-        boxMesh1Desc.m_meshInstanceInfo.m_transform[0][3] = -0.75;
+        boxMesh1Desc.m_meshInstanceInfo.m_transform[0][3] = -1.25;
 
         SBakeMeshDesc boxMesh2Desc = boxMesh1Desc;
-        boxMesh2Desc.m_meshInstanceInfo.m_transform[0][3] = +0.75;
+        boxMesh2Desc.m_meshInstanceInfo.m_transform[0][3] = +1.25;
 
         SBakeMeshDesc planeMesh1Desc;
         planeMesh1Desc.m_pPositionData = planeGeoPositions.data();
         planeMesh1Desc.m_pLightMapUVData = planeGeoLightMapUV.data();
         planeMesh1Desc.m_nVertexCount = planeVertexCount;
         planeMesh1Desc.m_nLightMapSize = Vec2i(planeLightMapSizeX, planeLightMapSizeY);
-        planeMesh1Desc.m_meshInstanceInfo.m_transform[2][3] = 0.1;
+        planeMesh1Desc.m_meshInstanceInfo.m_transform[2][3] = -0.5;
+        planeMesh1Desc.m_meshInstanceInfo.m_transform[0][0] = 3.0;
+        planeMesh1Desc.m_meshInstanceInfo.m_transform[1][1] = 3.0;
 
         std::vector<SBakeMeshDesc> bakeMeshDescs;
         bakeMeshDescs.push_back(boxMesh1Desc);
@@ -162,8 +164,8 @@ int main()
         AddBakeMeshs(bakeMeshDescs);
         PrePareLightMapGBufferPass();
         ExecuteLightMapGBufferPass();
-        //PrePareLightMapRayTracingPass();
-        //ExecuteLightMapRayTracingPass();
+        PrePareLightMapRayTracingPass();
+        ExecuteLightMapRayTracingPass();
         PrePareVisualizeResultPass();
         ExecuteVisualizeResultPass();
         DeleteGIBaker();

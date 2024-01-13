@@ -22,6 +22,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ***************************************************************************/
 
+// DOCUMENTATION
+// TODO:
+//   1. light map gbuffer generation: jitter result
+//
+
 #include "hwrtl_gi.h"
 #include <stdlib.h>
 #include <assert.h>
@@ -419,6 +424,7 @@ namespace gi
         uint32_t m_nAtlasNum;
 
         std::shared_ptr<CGraphicsPipelineState>m_pLightMapGBufferPSO;
+        std::shared_ptr<CRayTracingPipelineState>m_pRayTracingPSO;
         std::shared_ptr<CGraphicsPipelineState>m_pVisualizeGIPSO;
 	};
 
@@ -440,9 +446,6 @@ namespace gi
 
 	void hwrtl::gi::AddBakeMeshs(const std::vector<SBakeMeshDesc>& bakeMeshDescs)
 	{
-
-
-
 		for (uint32_t index = 0; index < bakeMeshDescs.size(); index++)
 		{
 			const SBakeMeshDesc& bakeMeshDesc = bakeMeshDescs[index];
@@ -623,7 +626,10 @@ namespace gi
             SAtlas& atlas = pGiBaker->m_atlas[index];
             atlas.m_hPosTexture = CreateTexture2D(texCreateDesc);
             atlas.m_hNormalTexture = CreateTexture2D(texCreateDesc);
-            atlas.m_resultTexture = CreateTexture2D(texCreateDesc);
+
+            STextureCreateDesc resTexCreateDesc = texCreateDesc;
+            resTexCreateDesc.m_eTexUsage = ETexUsage::USAGE_SRV | ETexUsage::USAGE_UAV;
+            atlas.m_resultTexture = CreateTexture2D(resTexCreateDesc);
         }
     }
 
@@ -684,12 +690,12 @@ namespace gi
                     struct SGbufferGenCB
                     {
                         Matrix44 m_worldTM;
-                        float m_worldTM[4][4];
                         Vec4 lightMapScaleAndBias;
 
                         float padding[44];
                     };
                     SGbufferGenCB gBufferCbData;
+                    gBufferCbData.m_worldTM.SetIdentity();
                     for (uint32_t i = 0; i < 4; i++)
                     {
                         for (uint32_t j = 0; j < 3; j++)
@@ -722,21 +728,15 @@ namespace gi
     {
         BuildAccelerationStructure();
 
-        SubmitCommandlist();
-        WaitForPreviousFrame();
-        ResetCmdList();
-
         std::vector<SShader>rtShaders;
         rtShaders.push_back(SShader{ ERayShaderType::RAY_RGS,L"LightMapRayTracingRayGen" });
+        rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"ClostHitMain" });
+        rtShaders.push_back(SShader{ ERayShaderType::RAY_MIH,L"RayMiassMain" });
 
         std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_gi.cpp");
         std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
 
-        CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 1,1,0,0 });
-
-        SubmitCommandlist();
-        WaitForPreviousFrame();
-        ResetCmdList();
+        pGiBaker->m_pRayTracingPSO = CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 2,1,0,0 });
     }
 
     void hwrtl::gi::ExecuteLightMapRayTracingPass()
@@ -747,8 +747,9 @@ namespace gi
 
             BeginRayTracing();
             SetShaderResource(atlas.m_resultTexture, ESlotType::ST_U, 0);
+            SetShaderResource(atlas.m_hPosTexture, ESlotType::ST_T, 1);
             SetTLAS(0);
-            DispatchRayTracicing(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
+            DispatchRayTracicing(pGiBaker->m_pRayTracingPSO, pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
             SubmitCommandlist();
             WaitForPreviousFrame();
@@ -780,7 +781,7 @@ namespace gi
     void hwrtl::gi::ExecuteVisualizeResultPass()
     {
         Vec2i visualTex(1024,1024);
-        STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_SRV | ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,visualTex.x,visualTex.y };
+        STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,visualTex.x,visualTex.y };
         SResourceHandle resouceHandle = CreateTexture2D(texCreateDesc);
 
         Vec3 eyePosition = Vec3(0, -6, 3);

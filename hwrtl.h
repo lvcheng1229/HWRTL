@@ -419,6 +419,7 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	};
 
 	class CGraphicsPipelineState {};
+	class CRayTracingPipelineState {};
 
 	void Init();
 
@@ -430,12 +431,12 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	// ray tracing pipeline
 	EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc, SResourceHandle vbResouce);
 	void BuildAccelerationStructure();
-	void CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources);
+	std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources);
 	
 	void SetShaderResource(SResourceHandle resource, ESlotType slotType, uint32_t bindIndex);
 	void SetTLAS(uint32_t bindIndex);
 	void BeginRayTracing();
-	void DispatchRayTracicing(uint32_t width, uint32_t height);
+	void DispatchRayTracicing(std::shared_ptr<CRayTracingPipelineState>rtPipelineState, uint32_t width, uint32_t height);
 
 	//rasterization pipeline
 	void AddRasterizationMeshs(const SMeshInstancesDesc& meshDescs);
