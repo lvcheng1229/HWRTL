@@ -683,6 +683,7 @@ namespace gi
                 {
                     struct SGbufferGenCB
                     {
+                        Matrix44 m_worldTM;
                         float m_worldTM[4][4];
                         Vec4 lightMapScaleAndBias;
 
@@ -693,10 +694,10 @@ namespace gi
                     {
                         for (uint32_t j = 0; j < 3; j++)
                         {
-                            gBufferCbData.m_worldTM[i][j] = giMesh.m_meshInstanceInfo.m_transform[j][i];
+                            gBufferCbData.m_worldTM.m[i][j] = giMesh.m_meshInstanceInfo.m_transform[j][i];
                         }
-                        gBufferCbData.m_worldTM[i][3] = 0;
                     }
+
                     for (uint32_t i = 0; i < 44; i++)
                     {
                         gBufferCbData.padding[i] = 1.0;
@@ -716,6 +717,44 @@ namespace gi
         WaitForPreviousFrame();
         ResetCmdList();
 	}
+
+    void hwrtl::gi::PrePareLightMapRayTracingPass()
+    {
+        BuildAccelerationStructure();
+
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
+
+        std::vector<SShader>rtShaders;
+        rtShaders.push_back(SShader{ ERayShaderType::RAY_RGS,L"LightMapRayTracingRayGen" });
+
+        std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_gi.cpp");
+        std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
+
+        CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 1,1,0,0 });
+
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
+    }
+
+    void hwrtl::gi::ExecuteLightMapRayTracingPass()
+    {
+        for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
+        {
+            SAtlas& atlas = pGiBaker->m_atlas[index];
+
+            BeginRayTracing();
+            SetShaderResource(atlas.m_resultTexture, ESlotType::ST_U, 0);
+            SetTLAS(0);
+            DispatchRayTracicing(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
+
+            SubmitCommandlist();
+            WaitForPreviousFrame();
+            ResetCmdList();
+        }
+    }
 
     void hwrtl::gi::PrePareVisualizeResultPass()
     {
@@ -745,7 +784,7 @@ namespace gi
         SResourceHandle resouceHandle = CreateTexture2D(texCreateDesc);
 
         Vec3 eyePosition = Vec3(0, -6, 3);
-        Vec3 eyeDirection = Vec3(0, -1, 0);
+        Vec3 eyeDirection = Vec3(0, 1, 0); // focus - eyePos
         Vec3 upDirection = Vec3(0, 0, 1);
 
         struct SViewCB

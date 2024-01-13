@@ -40,6 +40,8 @@ SOFTWARE.
 //      7. log sysytem
 //      8. gpu memory manager: seg list and buddy allocator for cb and tex
 //      9. split root parameter table to 4 tables
+//      10. d3d view abstraction
+//      11. release temporary upload buffer
 //
 
 
@@ -446,19 +448,100 @@ namespace hwrtl
 
     class CDXPassDescManager
     {
-        //
-        inline uint32_t GetCurrentPassSlotStart(uint32_t numSlotUsed)
+    public:
+        CDXPassDescManager()
+            :m_nCurrentStartSlotIndex(0)
         {
-
         }
+
+        void Init(ID3D12Device5Ptr pDevice)
+        {
+            m_pDevice = pDevice;
+            m_pDescHeap = CreateDescriptorHeap(pDevice, 1024, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
+
+            m_hCpuBegin = m_pDescHeap->GetCPUDescriptorHandleForHeapStart();
+            m_hGpuBegin = m_pDescHeap->GetGPUDescriptorHandleForHeapStart();
+
+            m_nElemSize = m_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
+
+        D3D12_CPU_DESCRIPTOR_HANDLE GetCPUHandle(uint32_t index)
+        {
+            return D3D12_CPU_DESCRIPTOR_HANDLE{ m_hCpuBegin.ptr + static_cast<UINT64>(index * m_nElemSize) };
+        }
+
+        D3D12_GPU_DESCRIPTOR_HANDLE GetGPUHandle(uint32_t index)
+        {
+            return D3D12_GPU_DESCRIPTOR_HANDLE{ m_hGpuBegin.ptr + static_cast<UINT64>(index * m_nElemSize) };
+        }
+
+        uint32_t GetAndAddCurrentPassSlotStart(uint32_t numSlotUsed)
+        {
+            uint32_t returnValue = m_nCurrentStartSlotIndex;
+            m_nCurrentStartSlotIndex += numSlotUsed;
+            return returnValue;
+        }
+
+        void ResetPassSlotStartIndex()
+        {
+            m_nCurrentStartSlotIndex = 0;
+        }
+
+        ID3D12DescriptorHeapPtr GetHeapPtr()
+        {
+            return m_pDescHeap;
+        }
+
+    private:
+        ID3D12DescriptorHeapPtr m_pDescHeap;
+        ID3D12Device5Ptr m_pDevice;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE m_hCpuBegin;
+        D3D12_GPU_DESCRIPTOR_HANDLE m_hGpuBegin;
+        
+        uint32_t m_nCurrentStartSlotIndex;
+        uint32_t m_nElemSize;
     };
+
+    class CDxPassHandleManager
+    {
+    public:
+        CDxPassHandleManager()
+        {
+            m_nDescNum[0] = m_nDescNum[1] = m_nDescNum[2] = m_nDescNum[3] = 0;
+        }
+
+        void SetCPUHandle(uint32_t index, D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle, ESlotType slotType)
+        {
+            m_csuHandle[uint32_t(slotType)][index] = cpuHandle;
+            m_nDescNum[uint32_t(slotType)] = m_nDescNum[uint32_t(slotType)] < (index + 1) ? (index + 1) : m_nDescNum[uint32_t(slotType)];
+        }
+
+        D3D12_CPU_DESCRIPTOR_HANDLE GetCPUHandle(uint32_t index, ESlotType slotType)
+        {
+            return m_csuHandle[uint32_t(slotType)][index];
+        }
+
+        uint32_t GetSlotNum(ESlotType slotType)
+        {
+            return m_nDescNum[uint32_t(slotType)];
+        }
+
+        void Reset()
+        {
+            //TODO
+        }
+
+    private:
+        D3D12_CPU_DESCRIPTOR_HANDLE m_csuHandle[4][32];    //TODO
+        uint32_t m_nDescNum[4];    //TODO
+    };
+
 
     struct SGraphicsContext
     {
-        CDXDescManager m_pipelineDescManager; //TODO:CDXPassDescManager
-        SHandleManager m_cbvDescHandles;
-        //D3D12_SHADER_RESOURCE_VIEW_DESC srvDescs[16];
-        //D3D12_UNORDERED_ACCESS_VIEW_DESC uavDescs[16];
+        CDxPassHandleManager m_dxPassHandleManager;
+        CDXPassDescManager m_dxPassDescManager;
     };
 
     class CDXRasterization
@@ -485,10 +568,7 @@ namespace hwrtl
         ID3D12ResourcePtr m_pShaderTable;
         ID3D12RootSignaturePtr m_pGlobalRootSig;
 
-
-
         std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
-        
         
         CDXDescManager m_rtDescManager;
 
@@ -585,31 +665,31 @@ namespace hwrtl
         return pQueue;
     }
 
-    void SubmitCommandList(bool bWaitAndReset = true)
-    {
-        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
-        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
-        ID3D12CommandQueuePtr pCmdQueue = pDXDevice->m_pCmdQueue;
-        ID3D12CommandAllocatorPtr pCmdAllocator = pDXDevice->m_pCmdAllocator;
-        ID3D12FencePtr pFence = pDXDevice->m_pFence;
-        
-        uint64_t& nfenceValue = pDXDevice->m_nFenceValue;
-        HANDLE& fenceEvent = pDXDevice->m_FenceEvent;
-
-        pCmdList->Close();
-        ID3D12CommandList* pGraphicsList = pCmdList.GetInterfacePtr();
-        pCmdQueue->ExecuteCommandLists(1, &pGraphicsList);
-        nfenceValue++;
-        pCmdQueue->Signal(pFence, nfenceValue);
-        if (bWaitAndReset)
-        {
-            pFence->SetEventOnCompletion(nfenceValue, fenceEvent);
-            WaitForSingleObject(fenceEvent, INFINITE);
-            pCmdList->Reset(pCmdAllocator, nullptr);
-        }
-        pDXDevice->m_resouceBarriers.clear();
-        pDXDevice->m_tempBuffers = CDXResouceManager();
-    }
+    //void SubmitCommandList(bool bWaitAndReset = true)
+    //{
+    //    ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+    //    ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+    //    ID3D12CommandQueuePtr pCmdQueue = pDXDevice->m_pCmdQueue;
+    //    ID3D12CommandAllocatorPtr pCmdAllocator = pDXDevice->m_pCmdAllocator;
+    //    ID3D12FencePtr pFence = pDXDevice->m_pFence;
+    //    
+    //    uint64_t& nfenceValue = pDXDevice->m_nFenceValue;
+    //    HANDLE& fenceEvent = pDXDevice->m_FenceEvent;
+    //
+    //    pCmdList->Close();
+    //    ID3D12CommandList* pGraphicsList = pCmdList.GetInterfacePtr();
+    //    pCmdQueue->ExecuteCommandLists(1, &pGraphicsList);
+    //    nfenceValue++;
+    //    pCmdQueue->Signal(pFence, nfenceValue);
+    //    if (bWaitAndReset)
+    //    {
+    //        pFence->SetEventOnCompletion(nfenceValue, fenceEvent);
+    //        WaitForSingleObject(fenceEvent, INFINITE);
+    //        pCmdList->Reset(pCmdAllocator, nullptr);
+    //    }
+    //    pDXDevice->m_resouceBarriers.clear();
+    //    pDXDevice->m_tempBuffers = CDXResouceManager();
+    //}
 
 	void hwrtl::Init()
 	{
@@ -630,9 +710,11 @@ namespace hwrtl
         // create desc heap
         pDXRayTracing->m_rtDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
         pDXDevice->m_rtvDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, false);
-        pDXDevice->m_csuDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
+        pDXDevice->m_csuDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, false);
         pDXDevice->m_dsvDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, false);
         
+        pDXRasterization->m_graphicsContext.m_dxPassDescManager.Init(pDXDevice->m_pDevice);
+
         ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pDXDevice->m_pCmdAllocator)));
         ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pDXDevice->m_pCmdAllocator, nullptr, IID_PPV_ARGS(&pDXDevice->m_pCmdList)));
 
@@ -882,10 +964,10 @@ namespace hwrtl
         pDXRayTracing->m_pblas = bottomLevelBuffers.pResult;
         pDXRayTracing->m_ptlas = topLevelBuffers.pResult;
         
-        SubmitCommandList();
+        //SubmitCommandList();
     }
 
-    IDxcBlobPtr CompileLibraryDXC(const std::wstring& shaderPath)
+    IDxcBlobPtr CompileLibraryDXC(const std::wstring& shaderPath, LPCWSTR pEntryPoint, LPCWSTR pTargetProfile)
     {
         std::ifstream shaderFile(shaderPath);
 
@@ -902,7 +984,7 @@ namespace hwrtl
         ThrowIfFailed(pDXRayTracing->m_pLibrary->CreateBlobWithEncodingFromPinned((LPBYTE)shader.c_str(), (uint32_t)shader.size(), 0, &pTextBlob));
 
         IDxcOperationResultPtr pResult;
-        ThrowIfFailed(pDXRayTracing->m_pDxcCompiler->Compile(pTextBlob, shaderPath.data(), L"", L"lib_6_3", nullptr, 0, nullptr, 0, nullptr, &pResult));
+        ThrowIfFailed(pDXRayTracing->m_pDxcCompiler->Compile(pTextBlob, shaderPath.data(), pEntryPoint, pTargetProfile, nullptr, 0, nullptr, 0, nullptr, &pResult));
 
         HRESULT resultCode;
         ThrowIfFailed(pResult->GetStatus(&resultCode));
@@ -1090,7 +1172,7 @@ namespace hwrtl
         uint32_t subObjectsIndex = 0;
 
         // create dxil subobjects
-        ID3DBlobPtr pDxilLib = CompileLibraryDXC(shaderPath);
+        ID3DBlobPtr pDxilLib = CompileLibraryDXC(shaderPath, L"", L"lib_6_3");
         SDxilLibrary dxilLib(pDxilLib, pEntryPoint.data(), pEntryPoint.size());
         stateSubObjects[subObjectsIndex] = dxilLib.m_stateSubobject;
         subObjectsIndex++;
@@ -1210,7 +1292,6 @@ namespace hwrtl
         }
 
         pDXRayTracing->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pDXDevice->m_tempBuffers.AllocResource());
-        SubmitCommandList();
     }
 
 #define CHECK_AND_ADD_FLAG(eTexUsage,eCheckUsage,eAddedFlag,nullFlag) (((uint32_t(eTexUsage) & uint32_t(eCheckUsage)) != 0) ? eAddedFlag : nullFlag)
@@ -1470,7 +1551,6 @@ namespace hwrtl
         // Dispatch
         pCmdList->SetPipelineState1(pDXRayTracing->m_pRtPipelineState);
         pCmdList->DispatchRays(&raytraceDesc);
-        SubmitCommandList();
     }
 
     static DXGI_FORMAT ConvertToDXVertexFormat(EVertexFormat vertexFormat)
@@ -1548,17 +1628,10 @@ namespace hwrtl
             for (uint32_t index = 0; index < rtShaders.size(); index++)
             {
                 bool bVS = rtShaders[index].m_eShaderType == ERayShaderType::RS_VS;
-                LPCSTR pTarget = bVS ? "vs_5_0" : "ps_5_0";
+                LPCWSTR pTarget = bVS ? L"vs_6_1" : L"ps_6_1";
                 uint32_t shaderIndex = bVS ? 0 : 1;
-                ID3DBlobPtr pError;
-                HRESULT vsResult = D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, WstringConverter().to_bytes(rtShaders[index].m_entryPoint).c_str(), pTarget, compileFlags, 0, &shaders[shaderIndex], &pError);
-
-                if (FAILED(vsResult))
-                {
-                    std::string msg = ConvertBlobToString(pError.GetInterfacePtr());
-                    std::cout << msg;
-                    ThrowIfFailed(-1);
-                }
+                
+                shaders[shaderIndex] = CompileLibraryDXC(shaderPath.c_str(), rtShaders[index].m_entryPoint.c_str(), pTarget);
             }
 
             std::vector<D3D12_INPUT_ELEMENT_DESC>inputElementDescs;
@@ -1643,8 +1716,6 @@ namespace hwrtl
         // command lists have finished execution on the GPU; apps should use 
         // fences to determine GPU execution progress.
         ThrowIfFailed(pCmdAllocator->Reset());
-
-        
     }
 
     void hwrtl::BeginRasterization(std::shared_ptr<CGraphicsPipelineState> graphicsPipelineStata)
@@ -1658,21 +1729,29 @@ namespace hwrtl
         // re-recording.
         ThrowIfFailed(pCommandList->Reset(pCmdAllocator, dxGraphicsPipelineStata->m_pRSPipelinState));
 
-        ID3D12DescriptorHeap* ppHeaps[] = { pDXDevice->m_csuDescManager.GetHeap()};
+        ;
+
+        ID3D12DescriptorHeap* ppHeaps[] = { pDXRasterization->m_graphicsContext.m_dxPassDescManager.GetHeapPtr() };
         pCommandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
         pCommandList->SetGraphicsRootSignature(dxGraphicsPipelineStata->m_pRsGlobalRootSig);
+    }
+
+    void hwrtl::SetTexture(SResourceHandle cbHandle, uint32_t offset)
+    {
+        //TODO
+        //TransitionResource
+        //CopyDescriptors
+        //SetComputeRootDescriptorTable
     }
 
     void hwrtl::SetConstantBuffer(SResourceHandle cbHandle, uint32_t offset)
     {
         auto pCommandList = pDXDevice->m_pCmdList;
 
-        uint32_t cbvIndex = pDXDevice->m_resouManager.GetCSUIndex(cbHandle);
-        
+        uint32_t cbvIndex = pDXDevice->m_resouManager.GetCSUIndex(cbHandle);        
         auto handle = pDXDevice->m_csuDescManager.GetCPUHandle(cbvIndex);
-        pDXRasterization->m_graphicsContext.m_cbvDescHandles.Set(handle, offset);
 
-
+        pDXRasterization->m_graphicsContext.m_dxPassHandleManager.SetCPUHandle(offset, handle, ESlotType::ST_B);
     }
 
     void hwrtl::SetRenderTargets(SResourceHandle* renderTargets,uint32_t renderTargetNum, SResourceHandle depthStencil, bool bClearRT, bool bClearDs)
@@ -1719,15 +1798,36 @@ namespace hwrtl
         }
     }
 
+    static void ApplyCBV()
+    {
+        auto pCommandList = pDXDevice->m_pCmdList;
+        //temporary code
+        {
+            auto& passHandleManager = pDXRasterization->m_graphicsContext.m_dxPassHandleManager;
+            auto& passDescManager = pDXRasterization->m_graphicsContext.m_dxPassDescManager;
+            uint32_t numCBVUsed = passHandleManager.GetSlotNum(ESlotType::ST_B);
+            uint32_t startIndex = passDescManager.GetAndAddCurrentPassSlotStart(numCBVUsed);
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle = passDescManager.GetCPUHandle(startIndex);
+
+
+            D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[16];
+            for (uint32_t index = 0; index < numCBVUsed; index++)
+            {
+                srcHandles[index] = passHandleManager.GetCPUHandle(index, ESlotType::ST_B);
+            }
+
+            pDXDevice->m_pDevice->CopyDescriptors(1, &cpuDescHandle, &numCBVUsed, numCBVUsed, srcHandles, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle = passDescManager.GetGPUHandle(startIndex);
+            pCommandList->SetGraphicsRootDescriptorTable(0/*TODO*/, gpuDescHandle);
+        }
+    }
+
     void hwrtl::DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation)
     {
         auto pCommandList = pDXDevice->m_pCmdList;
         
-
-        //temporary code
-        pDXRasterization->m_graphicsContext.m_pipelineDescManager;
-        pCommandList->SetGraphicsRootDescriptorTable(rootIndex, pDXDevice->m_csuDescManager.GetGPUHandle(cbvIndex));
-
+        ApplyCBV();
 
         pCommandList->RSSetViewports(1, &pDXRasterization->m_viewPort);
         pCommandList->RSSetScissorRects(1, &pDXRasterization->m_scissorRect);

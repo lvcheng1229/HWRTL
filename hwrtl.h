@@ -217,17 +217,29 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		{
 			for (uint32_t j = 0; j < 4; j++)
 			{
-				C.m[i][j] = A.row[i].Dot(Vec4(A.m[0][j], A.m[0][j], A.m[0][j], A.m[0][j]));
+				C.m[i][j] = A.row[i].Dot(Vec4(B.m[0][j], B.m[1][j], B.m[2][j], B.m[3][j]));
 			}
 		}
 		return C;
 	}
 
 	inline Matrix44 GetViewProjectionMatrixRightHand(Vec3 eyePosition, Vec3 eyeDirection, Vec3 upDirection, float fovAngleY, float aspectRatio, float nearZ, float farZ)
-	{
-		Vec3 yAxis = NormalizeVec3(-eyeDirection);
-		Vec3 xAxis = NormalizeVec3(CrossVec3(yAxis,upDirection));
-		Vec3 zAxis = CrossVec3(xAxis, yAxis);
+	{	
+		//wolrd space			 
+		//	  z y				 
+		//	  |/				 
+		//    --->x				 
+		
+		//capera space
+		//	  y
+		//	  |
+		//    ---->x
+		//	 /
+		//  z
+
+		Vec3 zAxis = NormalizeVec3(-eyeDirection);
+		Vec3 xAxis = NormalizeVec3(CrossVec3(upDirection,zAxis));
+		Vec3 yAxis = CrossVec3(zAxis, xAxis);
 
 		Vec3 negEye = -eyePosition;
 
@@ -257,8 +269,9 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		projMat.m[0][0] = Width;
 		projMat.m[1][1] = Height;
 		projMat.m[2][2] = fRange;
-		projMat.m[2][3] = -1.0f;
-		projMat.m[3][2] = fRange * nearZ;
+		projMat.m[2][3] = fRange * nearZ;
+		projMat.m[3][2] = -1.0f;
+		//return viewMat;
 		return MatrixMulti(projMat, viewMat);
 	}
 
@@ -433,6 +446,7 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	void BeginRasterization(std::shared_ptr<CGraphicsPipelineState> graphicsPipelineStata);
 	void SetRenderTargets(SResourceHandle* renderTargets, uint32_t renderTargetNum, SResourceHandle depthStencil = -1, bool bClearRT = true, bool bClearDs = true);
 	void SetConstantBuffer(SResourceHandle cbHandle, uint32_t offset);
+	void SetTexture(SResourceHandle cbHandle, uint32_t offset);
 	void SetViewport(float width, float height);
 	void SetVertexBuffers(SResourceHandle* vertexBuffer, uint32_t slotNum = 1);
 	void DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation);

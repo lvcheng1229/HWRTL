@@ -72,6 +72,15 @@ SLightMapGBufferOutput LightMapGBufferGenPS(SGeometryVS2PS IN)
     return output;
 }
 
+RaytracingAccelerationStructure gRtScene : register(t0);
+RWTexture2D<float4> gOutput : register(u0);
+
+[shader("raygeneration")]
+void LightMapRayTracingRayGen()
+{
+    uint3 launchIndex = DispatchRaysIndex();
+    gOutput[launchIndex.xy] = float4(1.0, 1.0, 0.0, 1.0);
+}
 
 
 
@@ -110,13 +119,13 @@ SVisualizeGeometryVS2PS VisualizeGIResultVS(SVisualizeGeometryApp2VS IN )
     SVisualizeGeometryVS2PS vs2PS = (SVisualizeGeometryVS2PS) 0;
     vs2PS.lightMapUV = IN.lightmapuv * vis_lightMapScaleAndBias.xy + vis_lightMapScaleAndBias.zw;
     float4 worldPosition = mul(vis_worldTM, float4(IN.posistion,1.0));
-    vs2PS.position = mul(vis_vpMat,worldPosition);
+    vs2PS.position = worldPosition;
     return vs2PS;
 }
 
 SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
 {
     SVisualizeGIResult output;
-    output.giResult = float4(IN.lightMapUV,0.0,1.0);
+    output.giResult = float4(IN.lightMapUV,1.0,1.0);
     return output;
 }

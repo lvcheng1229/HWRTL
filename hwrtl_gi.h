@@ -63,6 +63,9 @@ namespace gi
 
 	void PrePareLightMapGBufferPass();
 	void ExecuteLightMapGBufferPass();
+	
+	void PrePareLightMapRayTracingPass();
+	void ExecuteLightMapRayTracingPass();
 
 	void PrePareVisualizeResultPass();
 	void ExecuteVisualizeResultPass();

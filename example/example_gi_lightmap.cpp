@@ -162,6 +162,8 @@ int main()
         AddBakeMeshs(bakeMeshDescs);
         PrePareLightMapGBufferPass();
         ExecuteLightMapGBufferPass();
+        //PrePareLightMapRayTracingPass();
+        //ExecuteLightMapRayTracingPass();
         PrePareVisualizeResultPass();
         ExecuteVisualizeResultPass();
         DeleteGIBaker();
