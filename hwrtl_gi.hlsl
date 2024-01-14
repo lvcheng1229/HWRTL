@@ -22,6 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ***************************************************************************/
 
+SamplerState gsamPointWarp : register(s0, space1000);
+SamplerState gsamLinearWarp : register(s4, space1000);
+SamplerState gsamLinearClamp : register(s5, space1000);
+
 struct SGeometryApp2VS
 {
 	float3 posistion    : TEXCOORD0;
@@ -105,7 +109,7 @@ void LightMapRayTracingRayGen()
     
     RayDesc ray;
     ray.Origin = worldPosition;
-    ray.Direction = float3(0, 0, 1);
+    ray.Direction = normalize(float3(-1, -1, 1));
     ray.TMin = 0.01f;
     ray.TMax = 10000.0;
     
@@ -113,7 +117,7 @@ void LightMapRayTracingRayGen()
     TraceRay(
 		rtScene, // AccelerationStructure
 		RAY_FLAG_FORCE_OPAQUE,
-		RAY_TRACING_MASK_OPAQUE,
+		RAY_TRACING_MASK_OPAQUE, 
 		0, // RayContributionToHitGroupIndex
 		1, // MultiplierForGeometryContributionToShaderIndex
 		0, // MissShaderIndex
@@ -150,6 +154,8 @@ struct SVisualizeGeometryVS2PS
   float2 lightMapUV :TEXCOORD0;
 };
 
+Texture2D<float4> visLightMapResult: register(t0);
+
 cbuffer CVisualizeGeomConstantBuffer : register(b0)
 {
     float4x4 vis_worldTM;
@@ -180,6 +186,7 @@ SVisualizeGeometryVS2PS VisualizeGIResultVS(SVisualizeGeometryApp2VS IN )
 SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
 {
     SVisualizeGIResult output;
-    output.giResult = float4(IN.lightMapUV,1.0,1.0);
+    float4 result = visLightMapResult.SampleLevel(gsamPointWarp, IN.lightMapUV, 0.0);
+    output.giResult = float4(result.xyz, 1.0);
     return output;
 }

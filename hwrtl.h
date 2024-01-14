@@ -225,6 +225,11 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 
 	inline Matrix44 GetViewProjectionMatrixRightHand(Vec3 eyePosition, Vec3 eyeDirection, Vec3 upDirection, float fovAngleY, float aspectRatio, float nearZ, float farZ)
 	{	
+		//reverse z
+		float tempZ = nearZ;
+		nearZ = farZ;
+		farZ = tempZ;
+
 		//wolrd space			 
 		//	  z y				 
 		//	  |/				 
@@ -322,6 +327,8 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 
 	enum class ETexFormat
 	{
+		FT_None,
+		FT_DepthStencil,
 		FT_RGBA8_UNORM, 
 		FT_RGBA32_FLOAT,
 	};
@@ -424,6 +431,7 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	void Init();
 
 	SResourceHandle CreateTexture2D(STextureCreateDesc texCreateDesc);
+	SResourceHandle CreateDepthStencil(STextureCreateDesc dsCreateDesc);
 	SResourceHandle CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage);
 	void UpdateConstantBuffer(SResourceHandle resourceHandle, uint64_t nByteSize, const void* pData);
 	void SubmitCommand();
@@ -440,7 +448,9 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 
 	//rasterization pipeline
 	void AddRasterizationMeshs(const SMeshInstancesDesc& meshDescs);
-	std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats);
+
+	//TODO: CreateDesc
+	std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat);
 
 	void WaitForPreviousFrame();
 	void ResetCmdList();

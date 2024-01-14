@@ -652,7 +652,7 @@ namespace gi
         rtFormats.push_back(ETexFormat::FT_RGBA32_FLOAT);
         rtFormats.push_back(ETexFormat::FT_RGBA32_FLOAT);
 
-        pGiBaker->m_pLightMapGBufferPSO = CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources, vertexLayouts, rtFormats);
+        pGiBaker->m_pLightMapGBufferPSO = CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources, vertexLayouts, rtFormats, ETexFormat::FT_None);
     }
 
 	void hwrtl::gi::PrePareLightMapGBufferPass()
@@ -766,7 +766,7 @@ namespace gi
         rsShaders.push_back(SShader{ ERayShaderType::RS_VS,L"VisualizeGIResultVS" });
         rsShaders.push_back(SShader{ ERayShaderType::RS_PS,L"VisualizeGIResultPS" });
 
-        SShaderResources rasterizationResources = { 0,0,2,0 };
+        SShaderResources rasterizationResources = { 1,0,2,0 };
 
         std::vector<EVertexFormat>vertexLayouts;
         vertexLayouts.push_back(EVertexFormat::FT_FLOAT3);
@@ -775,14 +775,16 @@ namespace gi
         std::vector<ETexFormat>rtFormats;
         rtFormats.push_back(ETexFormat::FT_RGBA32_FLOAT);
 
-        pGiBaker->m_pVisualizeGIPSO = CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources, vertexLayouts, rtFormats);
+        pGiBaker->m_pVisualizeGIPSO = CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources, vertexLayouts, rtFormats, ETexFormat::FT_DepthStencil);
     }
 
     void hwrtl::gi::ExecuteVisualizeResultPass()
     {
         Vec2i visualTex(1024,1024);
         STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,visualTex.x,visualTex.y };
+        STextureCreateDesc dsCreateDesc{ ETexUsage::USAGE_DSV,ETexFormat::FT_DepthStencil,visualTex.x,visualTex.y };
         SResourceHandle resouceHandle = CreateTexture2D(texCreateDesc);
+        SResourceHandle dsHandle = CreateDepthStencil(dsCreateDesc);
 
         Vec3 eyePosition = Vec3(0, -6, 3);
         Vec3 eyeDirection = Vec3(0, 1, 0); // focus - eyePos
@@ -800,7 +802,7 @@ namespace gi
         viewCB.vpMat = GetViewProjectionMatrixRightHand(eyePosition, eyeDirection, upDirection, fovAngleY, aspectRatio, 0.1, 100.0).GetTrasnpose();
 
         BeginRasterization(pGiBaker->m_pVisualizeGIPSO);
-        SetRenderTargets(&resouceHandle, 1, -1, true, true);
+        SetRenderTargets(&resouceHandle, 1, dsHandle, true, true);
         SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
         SResourceHandle hViewCB = CreateBuffer(&viewCB, sizeof(SViewCB), sizeof(SViewCB), EBufferUsage::USAGE_CB);
@@ -813,6 +815,7 @@ namespace gi
             {
                 SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
                 SetConstantBuffer(giMesh.m_hConstantBuffer,0);
+                SetTexture(atlas.m_resultTexture,0); // TODO:set once
                 SResourceHandle vbHandles[2] = { giMesh.m_hPositionBuffer,giMesh.m_hLightMapUVBuffer };
                 SetVertexBuffers(vbHandles, 2);
                 DrawInstanced(giMesh.vertexCount, 1, 0, 0);

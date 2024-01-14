@@ -45,6 +45,7 @@ SOFTWARE.
 //      12. reset command list
 //      13. ERayShaderType to ERayShaderType and EShaderType
 //      14. SetShaderResource support raster rization
+//      15. state tracking: remove redundant barrier
 
 
 #include "HWRTL.h"
@@ -111,7 +112,7 @@ MAKE_SMART_COM_PTR(ID3D12PipelineState);
 
 #define align_to(_alignment, _val) (((_val + _alignment - 1) / _alignment) * _alignment)
 static constexpr uint32_t MaxPayloadSizeInBytes = 32 * sizeof(float);
-static constexpr uint32_t ShaderTableEntrySize = align_to(D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT, (D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES + 8));
+static constexpr uint32_t ShaderTableEntrySize = align_to(D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT, (D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES + sizeof(D3D12_GPU_DESCRIPTOR_HANDLE)));
 
 namespace hwrtl
 {
@@ -296,6 +297,7 @@ namespace hwrtl
             csuIndices.resize(1024);
             m_vbViews.resize(1024);
             m_resouceStates.resize(1024);
+            dsvIndices.resize(1024);
             for (uint32_t index = 0; index < 1024; index++)
             {
                 m_nextFreeResource[index] = index + 1;
@@ -321,6 +323,7 @@ namespace hwrtl
                 csuIndices.resize(newSize);
                 m_vbViews.resize(newSize);
                 m_resouceStates.resize(newSize);
+                dsvIndices.resize(newSize);
                 for (uint32_t index = m_currFreeIndex; index < m_nextFreeResource.size(); index++)
                 {
                     m_nextFreeResource[index] = index + 1;
@@ -355,6 +358,16 @@ namespace hwrtl
         void SetResouceCurrentState(uint32_t index, D3D12_RESOURCE_STATES resouceState)
         {
             m_resouceStates[index] = resouceState;
+        }
+
+        void SetDsvIndex(uint32_t resouceIndex, uint32_t dsvIndex)
+        {
+            dsvIndices[resouceIndex] = dsvIndex;
+        }
+
+        uint32_t GetDsvIndex(uint32_t resouceIndex)
+        {
+            return dsvIndices[resouceIndex];
         }
 
         void SetRTVIndex(uint32_t resouceIndex,uint32_t rtvIndex)
@@ -393,6 +406,7 @@ namespace hwrtl
         std::vector<uint32_t>m_nextFreeResource;
         std::vector<int>rtvIndices;
         std::vector<int>csuIndices;
+        std::vector<int>dsvIndices;
         std::vector<D3D12_VERTEX_BUFFER_VIEW>m_vbViews;
     };
 
@@ -574,7 +588,10 @@ namespace hwrtl
         std::vector<D3D12_VERTEX_BUFFER_VIEW>m_vbViews;
 
         D3D12_CPU_DESCRIPTOR_HANDLE m_renderTargetHandles[8];
+        D3D12_CPU_DESCRIPTOR_HANDLE m_depthStencilHandle;
+
         uint32_t m_nRenderTargetNum = 0;
+        bool bUseDepthStencil = false;
 
         D3D12_VIEWPORT m_viewPort;
         D3D12_RECT m_scissorRect;
@@ -687,32 +704,6 @@ namespace hwrtl
         ThrowIfFailed(pDevice->CreateCommandQueue(&cqDesc, IID_PPV_ARGS(&pQueue)));
         return pQueue;
     }
-
-    //void SubmitCommandList(bool bWaitAndReset = true)
-    //{
-    //    ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
-    //    ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
-    //    ID3D12CommandQueuePtr pCmdQueue = pDXDevice->m_pCmdQueue;
-    //    ID3D12CommandAllocatorPtr pCmdAllocator = pDXDevice->m_pCmdAllocator;
-    //    ID3D12FencePtr pFence = pDXDevice->m_pFence;
-    //    
-    //    uint64_t& nfenceValue = pDXDevice->m_nFenceValue;
-    //    HANDLE& fenceEvent = pDXDevice->m_FenceEvent;
-    //
-    //    pCmdList->Close();
-    //    ID3D12CommandList* pGraphicsList = pCmdList.GetInterfacePtr();
-    //    pCmdQueue->ExecuteCommandLists(1, &pGraphicsList);
-    //    nfenceValue++;
-    //    pCmdQueue->Signal(pFence, nfenceValue);
-    //    if (bWaitAndReset)
-    //    {
-    //        pFence->SetEventOnCompletion(nfenceValue, fenceEvent);
-    //        WaitForSingleObject(fenceEvent, INFINITE);
-    //        pCmdList->Reset(pCmdAllocator, nullptr);
-    //    }
-    //    pDXDevice->m_resouceBarriers.clear();
-    //    pDXDevice->m_tempBuffers = CDXResouceManager();
-    //}
 
 	void hwrtl::Init()
 	{
@@ -1326,13 +1317,24 @@ namespace hwrtl
         SRayTracingInitDesc rtInitDesc = { {0,0,0,0} };
 
         // create shader table
-        uint32_t shaderTableSize = ShaderTableEntrySize * rtShaders.size();
+        uint32_t shaderTableSize = ShaderTableEntrySize * rtShaders.size() + sizeof(D3D12_GPU_DESCRIPTOR_HANDLE)/*?*/;
 
         std::vector<char>shaderTableData;
         shaderTableData.resize(shaderTableSize);
 
         ID3D12StateObjectPropertiesPtr pRtsoProps;
         pDXRayTracing->m_pRtPipelineState->QueryInterface(IID_PPV_ARGS(&pRtsoProps));
+
+        std::vector<void*>rayGenShaderIdentifiers;
+        std::vector<void*>rayMissShaderIdentifiers;
+        std::vector<void*>rayHitShaderIdentifiers;
+
+        // ray gen shader identifier
+        // global gpu handle
+        // ray miss shader identifier
+        // global gpu handle
+        // ray hit shader identifier
+        // global gpu handle
 
         uint32_t shaderTableHGindex = 0;
         for (uint32_t index = 0; index < rtShaders.size(); index++)
@@ -1342,19 +1344,42 @@ namespace hwrtl
             {
             case ERayShaderType::RAY_AHS:
             case ERayShaderType::RAY_CHS:
-                memcpy(shaderTableData.data() + index * ShaderTableEntrySize, pRtsoProps->GetShaderIdentifier(pHitGroupExports[shaderTableHGindex].c_str()), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+                rayHitShaderIdentifiers.push_back(pRtsoProps->GetShaderIdentifier(pHitGroupExports[shaderTableHGindex].c_str()));
                 shaderTableHGindex++;
                 break;
-            default:
-                memcpy(shaderTableData.data() + index * ShaderTableEntrySize, pRtsoProps->GetShaderIdentifier(rtShader.m_entryPoint.c_str()), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+            case ERayShaderType::RAY_RGS:
+                rayGenShaderIdentifiers.push_back(pRtsoProps->GetShaderIdentifier(rtShader.m_entryPoint.c_str()));
+                break;
+            case ERayShaderType::RAY_MIH:
+                rayMissShaderIdentifiers.push_back(pRtsoProps->GetShaderIdentifier(rtShader.m_entryPoint.c_str()));
                 break;
             };
-
-            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = pDXRayTracing->m_rtDescManager.GetGPUHandle(0);
-            memcpy(shaderTableData.data() + index * ShaderTableEntrySize + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, &gpuHandle, sizeof(D3D12_GPU_DESCRIPTOR_HANDLE));
-            
             rtInitDesc.m_nShaderNum[uint32_t(rtShader.m_eShaderType)]++;
         }
+        uint32_t offsetShaderTableIndex = 0;
+        for (uint32_t index = 0; index < rayGenShaderIdentifiers.size(); index++)
+        {
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = pDXRayTracing->m_rtDescManager.GetGPUHandle(0);
+            memcpy(shaderTableData.data() + (offsetShaderTableIndex + index) * ShaderTableEntrySize, rayGenShaderIdentifiers[index], D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+            memcpy(shaderTableData.data() + (offsetShaderTableIndex + index) * ShaderTableEntrySize + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, &gpuHandle, sizeof(D3D12_GPU_DESCRIPTOR_HANDLE));
+        }
+        offsetShaderTableIndex += rayGenShaderIdentifiers.size();
+
+        for (uint32_t index = 0; index < rayMissShaderIdentifiers.size(); index++)
+        {
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = pDXRayTracing->m_rtDescManager.GetGPUHandle(0);
+            memcpy(shaderTableData.data() + (offsetShaderTableIndex + index) * ShaderTableEntrySize, rayMissShaderIdentifiers[index], D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+            memcpy(shaderTableData.data() + (offsetShaderTableIndex + index) * ShaderTableEntrySize + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, &gpuHandle, sizeof(D3D12_GPU_DESCRIPTOR_HANDLE));
+        }
+        offsetShaderTableIndex += rayMissShaderIdentifiers.size();
+
+        for (uint32_t index = 0; index < rayHitShaderIdentifiers.size(); index++)
+        {
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = pDXRayTracing->m_rtDescManager.GetGPUHandle(0);
+            memcpy(shaderTableData.data() + (offsetShaderTableIndex + index) * ShaderTableEntrySize, rayHitShaderIdentifiers[index], D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+            memcpy(shaderTableData.data() + (offsetShaderTableIndex + index) * ShaderTableEntrySize + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, &gpuHandle, sizeof(D3D12_GPU_DESCRIPTOR_HANDLE));
+        }
+        offsetShaderTableIndex += rayHitShaderIdentifiers.size();
 
         pDXRayTracing->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pDXDevice->m_tempBuffers.AllocResource());
 
@@ -1446,6 +1471,47 @@ namespace hwrtl
             pDevice->CreateRenderTargetView(resManager.GetResource(allocIndex), nullptr, rtvDescManager.GetCPUHandle(rtvIndex));
             resManager.SetRTVIndex(allocIndex, rtvIndex);
         }
+
+        return SResourceHandle(allocIndex);
+    }
+
+    SResourceHandle hwrtl::CreateDepthStencil(STextureCreateDesc dsCreateDesc)
+    {
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+        CDXResouceManager& resManager = pDXDevice->m_resouManager;
+
+        D3D12_RESOURCE_DESC depthStencilDesc;
+        depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        depthStencilDesc.Alignment = 0;
+        depthStencilDesc.Width = dsCreateDesc.m_width;
+        depthStencilDesc.Height = dsCreateDesc.m_height;
+        depthStencilDesc.DepthOrArraySize = 1;
+        depthStencilDesc.MipLevels = 1;
+        depthStencilDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        depthStencilDesc.SampleDesc.Count = 1;
+        depthStencilDesc.SampleDesc.Quality = 0;
+        depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        depthStencilDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+        D3D12_CLEAR_VALUE optClear;
+        optClear.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        optClear.DepthStencil.Depth = 0.0f;
+        optClear.DepthStencil.Stencil = 0;
+
+        D3D12_RESOURCE_STATES InitialResourceState = D3D12_RESOURCE_STATE_COMMON;
+        uint32_t allocIndex;
+        ThrowIfFailed(pDevice->CreateCommittedResource(&defaultHeapProperies, D3D12_HEAP_FLAG_NONE, &depthStencilDesc, InitialResourceState, &optClear, IID_PPV_ARGS(&resManager.AllocResource(allocIndex))));
+        resManager.SetResouceCurrentState(allocIndex, InitialResourceState);
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
+        dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsvDesc.Format = depthStencilDesc.Format;
+        dsvDesc.Texture2D.MipSlice = 0;
+
+        uint32_t dsvIndex = pDXDevice->m_dsvDescManager.AllocDesc();
+        pDevice->CreateDepthStencilView(resManager.GetResource(allocIndex), &dsvDesc, pDXDevice->m_dsvDescManager.GetCPUHandle(dsvIndex));
+        resManager.SetDsvIndex(allocIndex, dsvIndex);
 
         return SResourceHandle(allocIndex);
     }
@@ -1667,7 +1733,38 @@ namespace hwrtl
         return DXGI_FORMAT_UNKNOWN;
     }
 
-    std::shared_ptr<CGraphicsPipelineState> hwrtl::CreateRSPipelineState(const std::wstring shaderPath, std::vector<SShader> rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats)
+    static D3D12_STATIC_SAMPLER_DESC MakeStaticSampler(D3D12_FILTER filter, D3D12_TEXTURE_ADDRESS_MODE wrapMode, uint32_t registerIndex, uint32_t space)
+    {
+        D3D12_STATIC_SAMPLER_DESC Result = {};
+
+        Result.Filter = filter;
+        Result.AddressU = wrapMode;
+        Result.AddressV = wrapMode;
+        Result.AddressW = wrapMode;
+        Result.MipLODBias = 0.0f;
+        Result.MaxAnisotropy = 1;
+        Result.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+        Result.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+        Result.MinLOD = 0.0f;
+        Result.MaxLOD = D3D12_FLOAT32_MAX;
+        Result.ShaderRegister = registerIndex;
+        Result.RegisterSpace = space;
+        Result.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        return Result;
+    }
+
+    static const D3D12_STATIC_SAMPLER_DESC gStaticSamplerDescs[] =
+    {
+        MakeStaticSampler(D3D12_FILTER_MIN_MAG_MIP_POINT,        D3D12_TEXTURE_ADDRESS_MODE_WRAP,  0, 1000),
+        MakeStaticSampler(D3D12_FILTER_MIN_MAG_MIP_POINT,        D3D12_TEXTURE_ADDRESS_MODE_CLAMP, 1, 1000),
+        MakeStaticSampler(D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_WRAP,  2, 1000),
+        MakeStaticSampler(D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_CLAMP, 3, 1000),
+        MakeStaticSampler(D3D12_FILTER_MIN_MAG_MIP_LINEAR,       D3D12_TEXTURE_ADDRESS_MODE_WRAP,  4, 1000),
+        MakeStaticSampler(D3D12_FILTER_MIN_MAG_MIP_LINEAR,       D3D12_TEXTURE_ADDRESS_MODE_CLAMP, 5, 1000),
+    };
+
+    std::shared_ptr<CGraphicsPipelineState> hwrtl::CreateRSPipelineState(const std::wstring shaderPath, std::vector<SShader> rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat)
     {
         auto pDevice = pDXDevice->m_pDevice;
         ID3D12RootSignaturePtr pRsGlobalRootSig;
@@ -1685,7 +1782,7 @@ namespace hwrtl
                 {
                     descRanges[noEmptySignatureNum].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(index);
                     descRanges[noEmptySignatureNum].NumDescriptors = rasterizationResources[index];
-                    descRanges[noEmptySignatureNum].BaseShaderRegister = rasterizationResources.GetPreSumNum(index);
+                    descRanges[noEmptySignatureNum].BaseShaderRegister = 0;// rasterizationResources.GetPreSumNum(index);
                     descRanges[noEmptySignatureNum].RegisterSpace = 0;
                     descRanges[noEmptySignatureNum].OffsetInDescriptorsFromTableStart = noEmptySignatureNum;
                     noEmptySignatureNum++;
@@ -1704,8 +1801,8 @@ namespace hwrtl
             D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
             rootSigDesc.NumParameters = 1;
             rootSigDesc.pParameters = &rootParameter;
-            rootSigDesc.NumStaticSamplers = 0;
-            rootSigDesc.pStaticSamplers = 0;
+            rootSigDesc.NumStaticSamplers = 6;
+            rootSigDesc.pStaticSamplers = gStaticSamplerDescs;
             rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
             ID3DBlobPtr signature;
@@ -1778,8 +1875,19 @@ namespace hwrtl
             psoDesc.PS.BytecodeLength = shaders[1]->GetBufferSize();
             psoDesc.RasterizerState = rasterizerDesc;
             psoDesc.BlendState = blendDesc;
-            psoDesc.DepthStencilState.DepthEnable = FALSE;
-            psoDesc.DepthStencilState.StencilEnable = FALSE;
+            if (dsFormat == ETexFormat::FT_DepthStencil)
+            {
+                psoDesc.DepthStencilState.DepthEnable = TRUE;
+                psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+                psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER;
+                psoDesc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+            }
+            else
+            {
+                psoDesc.DepthStencilState.DepthEnable = FALSE;
+                psoDesc.DepthStencilState.StencilEnable = FALSE;
+            }
+
             psoDesc.SampleMask = UINT_MAX;
             psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
             psoDesc.NumRenderTargets = rtFormats.size();
@@ -1835,6 +1943,14 @@ namespace hwrtl
 
     void hwrtl::SetTexture(SResourceHandle cbHandle, uint32_t offset)
     {
+        auto pCommandList = pDXDevice->m_pCmdList;
+
+        uint32_t srvIndex = pDXDevice->m_resouManager.GetCSUIndex(cbHandle);
+        auto handle = pDXDevice->m_csuDescManager.GetCPUHandle(srvIndex);
+
+        pDXRasterization->m_graphicsContext.m_dxPassHandleManager.SetCPUHandle(offset, handle, ESlotType::ST_T);
+
+
         //see SetShaderResource
 
         //TODO
@@ -1874,6 +1990,25 @@ namespace hwrtl
         }
         pDXRasterization->m_nRenderTargetNum = renderTargetNum;
 
+        if (depthStencil >= 0)
+        {
+            uint32_t dsvIndex = resouManager.GetDsvIndex(depthStencil);
+            pDXRasterization->m_depthStencilHandle = pDXDevice->m_dsvDescManager.GetCPUHandle(dsvIndex);
+
+            D3D12_RESOURCE_BARRIER barrier = {};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            barrier.Transition.pResource = resouManager.GetResource(depthStencil);
+            barrier.Transition.StateBefore = resouManager.GetResouceCurrentState(depthStencil);
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+            pDXDevice->m_resouManager.SetResouceCurrentState(depthStencil, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            pDXDevice->m_resouceBarriers.push_back(barrier);
+            pDXRasterization->bUseDepthStencil = true;
+        }
+        
+
         auto pCommandList = pDXDevice->m_pCmdList;
         if (pDXDevice->m_resouceBarriers.size() > 0)
         {
@@ -1897,28 +2032,49 @@ namespace hwrtl
         }
     }
 
-    static void ApplyCBV()
+    static void ApplyCBVSRV()
     {
         auto pCommandList = pDXDevice->m_pCmdList;
+        //TODO:
         //temporary code
         {
             auto& passHandleManager = pDXRasterization->m_graphicsContext.m_dxPassHandleManager;
             auto& passDescManager = pDXRasterization->m_graphicsContext.m_dxPassDescManager;
+
+            uint32_t numSRVUsed = passHandleManager.GetSlotNum(ESlotType::ST_T);
             uint32_t numCBVUsed = passHandleManager.GetSlotNum(ESlotType::ST_B);
-            uint32_t startIndex = passDescManager.GetAndAddCurrentPassSlotStart(numCBVUsed);
-            D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle = passDescManager.GetCPUHandle(startIndex);
+            
+            uint32_t totalUsed = numSRVUsed + numCBVUsed;
+            uint32_t startIndex = passDescManager.GetAndAddCurrentPassSlotStart(totalUsed);
 
-
-            D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[16];
-            for (uint32_t index = 0; index < numCBVUsed; index++)
+            if (numSRVUsed > 0)
             {
-                srcHandles[index] = passHandleManager.GetCPUHandle(index, ESlotType::ST_B);
+                D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[16];
+                for (uint32_t index = 0; index < numSRVUsed; index++)
+                {
+                    srcHandles[index] = passHandleManager.GetCPUHandle(index, ESlotType::ST_T);
+                }
+
+                D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle = passDescManager.GetCPUHandle(startIndex);
+                pDXDevice->m_pDevice->CopyDescriptors(1, &cpuDescHandle, &numSRVUsed, numSRVUsed, srcHandles, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             }
 
-            pDXDevice->m_pDevice->CopyDescriptors(1, &cpuDescHandle, &numCBVUsed, numCBVUsed, srcHandles, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            if (numCBVUsed > 0)
+            {
+                D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[16];
+                for (uint32_t index = 0; index < numCBVUsed; index++)
+                {
+                    srcHandles[index] = passHandleManager.GetCPUHandle(index, ESlotType::ST_B);
+                }
+                D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle = passDescManager.GetCPUHandle(startIndex + numSRVUsed);
+                pDXDevice->m_pDevice->CopyDescriptors(1, &cpuDescHandle, &numCBVUsed, numCBVUsed, srcHandles, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            }
 
-            D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle = passDescManager.GetGPUHandle(startIndex);
-            pCommandList->SetGraphicsRootDescriptorTable(0/*TODO*/, gpuDescHandle);
+            {
+
+                D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle = passDescManager.GetGPUHandle(startIndex);
+                pCommandList->SetGraphicsRootDescriptorTable(0/*TODO*/, gpuDescHandle);
+            }
         }
     }
 
@@ -1926,12 +2082,19 @@ namespace hwrtl
     {
         auto pCommandList = pDXDevice->m_pCmdList;
         
-        ApplyCBV();
+        ApplyCBVSRV();
 
         pCommandList->RSSetViewports(1, &pDXRasterization->m_viewPort);
         pCommandList->RSSetScissorRects(1, &pDXRasterization->m_scissorRect);
 
-        pCommandList->OMSetRenderTargets(pDXRasterization->m_nRenderTargetNum, pDXRasterization->m_renderTargetHandles, FALSE, nullptr);
+        if (pDXRasterization->bUseDepthStencil)
+        {
+            pCommandList->OMSetRenderTargets(pDXRasterization->m_nRenderTargetNum, pDXRasterization->m_renderTargetHandles, FALSE, &pDXRasterization->m_depthStencilHandle);
+        }
+        else
+        {
+            pCommandList->OMSetRenderTargets(pDXRasterization->m_nRenderTargetNum, pDXRasterization->m_renderTargetHandles, FALSE, nullptr);
+        }
 
         //const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
         //pCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
