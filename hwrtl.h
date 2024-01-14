@@ -276,7 +276,6 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		projMat.m[2][2] = fRange;
 		projMat.m[2][3] = fRange * nearZ;
 		projMat.m[3][2] = -1.0f;
-		//return viewMat;
 		return MatrixMulti(projMat, viewMat);
 	}
 
@@ -426,19 +425,47 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		}
 	};
 
-	class CGraphicsPipelineState {};
-	class CRayTracingPipelineState {};
+	// RHI Object Define
+
+	class CGraphicsPipelineState 
+	{
+	public:
+		CGraphicsPipelineState() {}
+		virtual ~CGraphicsPipelineState() {}
+	};
+	
+	class CRayTracingPipelineState 
+	{
+	public:
+		CRayTracingPipelineState() {}
+		virtual ~CRayTracingPipelineState() {}
+	};
+
+	class CTexture2D 
+	{
+	public:
+		CTexture2D() {}
+		virtual ~CTexture2D() {}
+	};
 
 	void Init();
+	void DestroyScene();
+	void Shutdown();
 
+	// Common devie commands
 	SResourceHandle CreateTexture2D(STextureCreateDesc texCreateDesc);
 	SResourceHandle CreateDepthStencil(STextureCreateDesc dsCreateDesc);
 	SResourceHandle CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage);
-	void UpdateConstantBuffer(SResourceHandle resourceHandle, uint64_t nByteSize, const void* pData);
-	void SubmitCommand();
-	void TempResetCommand();
 
-	// ray tracing pipeline
+	void UpdateConstantBuffer(SResourceHandle resourceHandle, uint64_t nByteSize, const void* pData);
+
+	// Common context commnad
+	void SubmitCommandlist();
+	void ResetCommandList();
+	void WaitForPreviousFrame();
+	void ResetCmdList();
+
+	// Ray tracing commnad
 	EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc, SResourceHandle vbResouce);
 	void BuildAccelerationStructure();
 	std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources);
@@ -448,14 +475,11 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	void BeginRayTracing();
 	void DispatchRayTracicing(std::shared_ptr<CRayTracingPipelineState>rtPipelineState, uint32_t width, uint32_t height);
 
-	//rasterization pipeline
-	void AddRasterizationMeshs(const SMeshInstancesDesc& meshDescs);
+	// Rasterization commnad
 
 	//TODO: CreateDesc
 	std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat);
 
-	void WaitForPreviousFrame();
-	void ResetCmdList();
 	void BeginRasterization(std::shared_ptr<CGraphicsPipelineState> graphicsPipelineStata);
 	void SetRenderTargets(SResourceHandle* renderTargets, uint32_t renderTargetNum, SResourceHandle depthStencil = -1, bool bClearRT = true, bool bClearDs = true);
 	void SetConstantBuffer(SResourceHandle cbHandle, uint32_t offset);
@@ -463,10 +487,6 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	void SetViewport(float width, float height);
 	void SetVertexBuffers(SResourceHandle* vertexBuffer, uint32_t slotNum = 1);
 	void DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation);
-	void SubmitCommandlist();
-
-	void DestroyScene();
-	void Shutdown();
 }
 
 #endif

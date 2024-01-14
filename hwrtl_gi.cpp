@@ -633,8 +633,6 @@ namespace gi
             resTexCreateDesc.m_eTexUsage = ETexUsage::USAGE_SRV | ETexUsage::USAGE_UAV;
             atlas.m_resultTexture = CreateTexture2D(resTexCreateDesc);
         }
-
-
     }
 
     static void PrePareGBufferPassPSO()
@@ -733,7 +731,7 @@ namespace gi
         BuildAccelerationStructure();
 
         //TODO
-        TempResetCommand();
+        ResetCommandList();
         struct SRayTracingLight
         {
             Vec3 m_color;

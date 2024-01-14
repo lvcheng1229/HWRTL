@@ -82,7 +82,7 @@ SOFTWARE.
 #include <iostream>
 #include <vector>
 #include <stdexcept>
-
+#include <assert.h>
 
 #pragma comment(lib,"d3dcompiler.lib")
 #pragma comment(lib,"dxcompiler.lib")
@@ -113,52 +113,22 @@ MAKE_SMART_COM_PTR(ID3D12StateObjectProperties);
 MAKE_SMART_COM_PTR(ID3D12DescriptorHeap);
 MAKE_SMART_COM_PTR(ID3D12PipelineState);
 
-
-
 #define align_to(_alignment, _val) (((_val + _alignment - 1) / _alignment) * _alignment)
 static constexpr uint32_t MaxPayloadSizeInBytes = 32 * sizeof(float);
 static constexpr uint32_t ShaderTableEntrySize = align_to(D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT, (D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES + sizeof(D3D12_GPU_DESCRIPTOR_HANDLE)));
 
 namespace hwrtl
 {
-    //https://github.com/microsoft/DirectX-Graphics-Samples
     /***************************************************************************
-    The MIT License (MIT)
-    
-    Copyright (c) 2015 Microsoft
-    
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-    
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-    
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE.
+    * Common Helper Functions
     ***************************************************************************/
-
-    inline std::string ResultToString(HRESULT hr)
-    {
-        char s_str[64] = {};
-        sprintf_s(s_str, "HRESULT of 0x%08X", static_cast<UINT>(hr));
-        return std::string(s_str);
-    }
-
-    inline void ThrowIfFailed(HRESULT hr)
+    
+    static void ThrowIfFailed(HRESULT hr)
     {
 #if ENABLE_THROW_FAILED_RESULT
         if (FAILED(hr))
         {
-            throw std::runtime_error(ResultToString(hr));
+            assert(false);
         }
 #endif
     }
@@ -172,7 +142,118 @@ namespace hwrtl
         return std::string(infoLog.data());
     }
 
-    struct SDXMeshInstanceInfo
+    /***************************************************************************
+    * Dx12 Helper Functions
+    * 1. Create Dx Device
+    * 2. Create Dx Descriptor Heap
+    * 3. Create Dx CommandQueue
+    ***************************************************************************/
+
+    static ID3D12Device5Ptr Dx12CreateDevice(IDXGIFactory4Ptr pDxgiFactory)
+    {
+        IDXGIAdapter1Ptr pAdapter;
+
+        for (uint32_t i = 0; DXGI_ERROR_NOT_FOUND != pDxgiFactory->EnumAdapters1(i, &pAdapter); i++)
+        {
+            DXGI_ADAPTER_DESC1 desc;
+            pAdapter->GetDesc1(&desc);
+
+            if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+            {
+                continue;
+            }
+
+#ifdef ENABLE_DX12_DEBUG_LAYER
+            ID3D12DebugPtr pDx12Debug;
+            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&pDx12Debug))))
+            {
+                pDx12Debug->EnableDebugLayer();
+            }
+#endif
+            ID3D12Device5Ptr pDevice;
+            ThrowIfFailed(D3D12CreateDevice(pAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&pDevice)));
+
+            D3D12_FEATURE_DATA_D3D12_OPTIONS5 features5;
+            HRESULT hr = pDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &features5, sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS5));
+            if (SUCCEEDED(hr) && features5.RaytracingTier != D3D12_RAYTRACING_TIER_NOT_SUPPORTED)
+            {
+                return pDevice;
+            }
+        }
+
+        ThrowIfFailed(-1);
+        return nullptr;
+    }
+
+    static ID3D12DescriptorHeapPtr Dx12CreateDescriptorHeap(ID3D12Device5Ptr pDevice, uint32_t count, D3D12_DESCRIPTOR_HEAP_TYPE type, bool shaderVisible)
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+        desc.NumDescriptors = count;
+        desc.Type = type;
+        desc.Flags = shaderVisible ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE : D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+
+        ID3D12DescriptorHeapPtr pHeap;
+        ThrowIfFailed(pDevice->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&pHeap)));
+        return pHeap;
+    }
+
+    static ID3D12CommandQueuePtr Dx12CreateCommandQueue(ID3D12Device5Ptr pDevice)
+    {
+        ID3D12CommandQueuePtr pQueue;
+        D3D12_COMMAND_QUEUE_DESC cqDesc = {};
+        cqDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+        cqDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        ThrowIfFailed(pDevice->CreateCommandQueue(&cqDesc, IID_PPV_ARGS(&pQueue)));
+        return pQueue;
+    }
+
+    /***************************************************************************
+    * Convert RHI enum to Dx enum
+    * 1. Convert Instance Flag To Dx Instance Flag
+    * 2. Create Texture Usage To Dx Flag
+    * 3. Create Texture Format To Dx Format
+    ***************************************************************************/
+
+    D3D12_RAYTRACING_INSTANCE_FLAGS Dx12ConvertInstanceFlag(EInstanceFlag instanceFlag)
+    {
+        switch (instanceFlag)
+        {
+        case EInstanceFlag::CULL_DISABLE:
+            return D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+        case EInstanceFlag::FRONTFACE_CCW:
+            return D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
+        default:
+            return D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+        }
+    }
+
+#define CHECK_AND_ADD_FLAG(eTexUsage,eCheckUsage,eAddedFlag,nullFlag) (((uint32_t(eTexUsage) & uint32_t(eCheckUsage)) != 0) ? eAddedFlag : nullFlag)
+
+    static D3D12_RESOURCE_FLAGS Dx12ConvertResouceFlags(ETexUsage eTexUsage)
+    {
+        D3D12_RESOURCE_FLAGS resouceFlags = D3D12_RESOURCE_FLAG_NONE;
+        resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_UAV, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_NONE);
+        resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_RTV, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_NONE);
+        resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_DSV, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_NONE);
+        return resouceFlags;
+    }
+
+    static DXGI_FORMAT Dx12ConvertTextureFormat(ETexFormat eTexFormat)
+    {
+        switch (eTexFormat)
+        {
+        case ETexFormat::FT_RGBA8_UNORM:
+            return DXGI_FORMAT_R8G8B8A8_UNORM;
+            break;
+        case ETexFormat::FT_RGBA32_FLOAT:
+            return DXGI_FORMAT_R32G32B32A32_FLOAT;
+            break;
+        }
+        ThrowIfFailed(-1);
+        return DXGI_FORMAT_UNKNOWN;
+    }
+
+    struct SDx12MeshInstanceInfo
     {
         ID3D12ResourcePtr m_pPositionBuffer;
         ID3D12ResourcePtr m_pIndexBuffer;
@@ -187,35 +268,22 @@ namespace hwrtl
         std::vector<SMeshInstanceInfo>instanes;
     };
 
-    struct SDXAccelerationStructureBuffers
+    struct SDx12AccelerationStructureBuffers
     {
         ID3D12ResourcePtr pScratch;
         ID3D12ResourcePtr pResult;
         ID3D12ResourcePtr pInstanceDesc;
     };
 
-
-    ID3D12DescriptorHeapPtr CreateDescriptorHeap(ID3D12Device5Ptr pDevice, uint32_t count, D3D12_DESCRIPTOR_HEAP_TYPE type, bool shaderVisible)
-    {
-        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-        desc.NumDescriptors = count;
-        desc.Type = type;
-        desc.Flags = shaderVisible ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE : D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-
-        ID3D12DescriptorHeapPtr pHeap;
-        ThrowIfFailed(pDevice->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&pHeap)));
-        return pHeap;
-    }
-
-    class CDXDescManager
+    class CDx12DescManager
     {
     public :
-        CDXDescManager() {};
+        CDx12DescManager() {};
 
         void Init(ID3D12Device5Ptr pDevice, uint32_t size, D3D12_DESCRIPTOR_HEAP_TYPE descHeapType, bool shaderVisible)
         {
             m_pDevice = pDevice;
-            m_pDescHeap = CreateDescriptorHeap(pDevice, size, descHeapType, shaderVisible);
+            m_pDescHeap = Dx12CreateDescriptorHeap(pDevice, size, descHeapType, shaderVisible);
             m_descHeapType = descHeapType;
 
             m_nextFreeDescIndex.resize(size);
@@ -279,15 +347,6 @@ namespace hwrtl
         ID3D12DescriptorHeapPtr m_pDescHeap;
         D3D12_DESCRIPTOR_HEAP_TYPE m_descHeapType;
 
-        ID3D12Device5Ptr m_pDevice;
-    };
-
-    class CDXPipelineDescManager
-    {
-    public:
-    private:
-        ID3D12DescriptorHeapPtr m_pDescHeap;
-        D3D12_DESCRIPTOR_HEAP_TYPE m_descHeapType;
         ID3D12Device5Ptr m_pDevice;
     };
 
@@ -415,78 +474,6 @@ namespace hwrtl
         std::vector<D3D12_VERTEX_BUFFER_VIEW>m_vbViews;
     };
 
-    class CDxGraphicsPipelineState : public CGraphicsPipelineState
-    {
-    public:
-        ID3D12RootSignaturePtr m_pRsGlobalRootSig;
-        ID3D12PipelineStatePtr m_pRSPipelinState;
-
-        CDxGraphicsPipelineState(ID3D12RootSignaturePtr rsGlobalRootSig, ID3D12PipelineStatePtr rsPipelinState)
-            :m_pRsGlobalRootSig(rsGlobalRootSig)
-            , m_pRSPipelinState(rsPipelinState)
-        {
-
-        }
-    };
-
-    struct SRayTracingInitDesc
-    {
-        uint32_t m_nShaderNum[4];
-    };
-
-    class CDxRayTracingPipelineState : public CRayTracingPipelineState
-    {
-    public:
-
-        uint32_t m_nShaderNum[4];
-
-        CDxRayTracingPipelineState(SRayTracingInitDesc rtInitDesc)
-        {
-            m_nShaderNum[0] = rtInitDesc.m_nShaderNum[0];
-            m_nShaderNum[1] = rtInitDesc.m_nShaderNum[1];
-            m_nShaderNum[2] = rtInitDesc.m_nShaderNum[2];
-            m_nShaderNum[3] = rtInitDesc.m_nShaderNum[3];
-        }
-    };
-
-    class CDXDevice
-    {
-    public:
-        ID3D12Device5Ptr m_pDevice;
-        ID3D12GraphicsCommandList4Ptr m_pCmdList;
-        ID3D12CommandQueuePtr m_pCmdQueue;
-        ID3D12CommandAllocatorPtr m_pCmdAllocator;
-        ID3D12FencePtr m_pFence;
-        HANDLE m_FenceEvent;
-        uint64_t m_nFenceValue = 0;;
-
-        CDXResouceManager m_tempBuffers;
-
-        CDXDescManager m_rtvDescManager;
-        CDXDescManager m_dsvDescManager;
-        CDXDescManager m_csuDescManager;//cbv srv uav 
-
-        CDXResouceManager m_resouManager;
-        std::vector<D3D12_RESOURCE_BARRIER> m_resouceBarriers;
-    };
-
-    class SHandleManager
-    {
-    public:
-        void Set(D3D12_CPU_DESCRIPTOR_HANDLE handle, uint32_t index)
-        {
-            m_handles[index] = handle;
-            m_nHandles = m_nHandles < index ? index : m_nHandles;
-        }
-        uint32_t GetNum()
-        {
-            return m_nHandles;
-        }
-    private:
-        uint32_t m_nHandles = 0;
-        D3D12_CPU_DESCRIPTOR_HANDLE m_handles[16];
-    };
-
     class CDXPassDescManager
     {
     public:
@@ -498,7 +485,7 @@ namespace hwrtl
         void Init(ID3D12Device5Ptr pDevice)
         {
             m_pDevice = pDevice;
-            m_pDescHeap = CreateDescriptorHeap(pDevice, 1024, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
+            m_pDescHeap = Dx12CreateDescriptorHeap(pDevice, 1024, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
 
             m_hCpuBegin = m_pDescHeap->GetCPUDescriptorHandleForHeapStart();
             m_hGpuBegin = m_pDescHeap->GetGPUDescriptorHandleForHeapStart();
@@ -539,7 +526,7 @@ namespace hwrtl
 
         D3D12_CPU_DESCRIPTOR_HANDLE m_hCpuBegin;
         D3D12_GPU_DESCRIPTOR_HANDLE m_hGpuBegin;
-        
+
         uint32_t m_nCurrentStartSlotIndex;
         uint32_t m_nElemSize;
     };
@@ -578,6 +565,66 @@ namespace hwrtl
         uint32_t m_nDescNum[4];    //TODO
     };
 
+    class CDxGraphicsPipelineState : public CGraphicsPipelineState
+    {
+    public:
+        ID3D12RootSignaturePtr m_pRsGlobalRootSig;
+        ID3D12PipelineStatePtr m_pRSPipelinState;
+
+        CDxGraphicsPipelineState(ID3D12RootSignaturePtr rsGlobalRootSig, ID3D12PipelineStatePtr rsPipelinState)
+            :m_pRsGlobalRootSig(rsGlobalRootSig)
+            , m_pRSPipelinState(rsPipelinState) {}
+    };
+
+    struct SRayTracingInitDesc
+    {
+        uint32_t m_nShaderNum[4];
+    };
+
+    class CDxRayTracingPipelineState : public CRayTracingPipelineState
+    {
+    public:
+
+        uint32_t m_nShaderNum[4];
+
+        CDxRayTracingPipelineState(SRayTracingInitDesc rtInitDesc)
+        {
+            m_nShaderNum[0] = rtInitDesc.m_nShaderNum[0];
+            m_nShaderNum[1] = rtInitDesc.m_nShaderNum[1];
+            m_nShaderNum[2] = rtInitDesc.m_nShaderNum[2];
+            m_nShaderNum[3] = rtInitDesc.m_nShaderNum[3];
+        }
+    };
+
+    class CDXDevice
+    {
+    public:
+        ID3D12Device5Ptr m_pDevice;
+        ID3D12GraphicsCommandList4Ptr m_pCmdList;
+        ID3D12CommandQueuePtr m_pCmdQueue;
+        ID3D12CommandAllocatorPtr m_pCmdAllocator;
+        ID3D12FencePtr m_pFence;
+
+        IDxcCompilerPtr m_pDxcCompiler;
+        IDxcLibraryPtr m_pLibrary;
+        IDxcValidatorPtr m_dxcValidator;
+
+#if ENABLE_PIX_FRAME_CAPTURE
+        HMODULE m_pixModule;
+#endif
+
+        HANDLE m_FenceEvent;
+        uint64_t m_nFenceValue = 0;;
+
+        CDXResouceManager m_tempBuffers;
+
+        CDx12DescManager m_rtvDescManager;
+        CDx12DescManager m_dsvDescManager;
+        CDx12DescManager m_csuDescManager;//cbv srv uav 
+
+        CDXResouceManager m_resouManager;
+        std::vector<D3D12_RESOURCE_BARRIER> m_resouceBarriers;
+    };
 
     struct SGraphicsContext
     {
@@ -605,110 +652,27 @@ namespace hwrtl
     class CDXRayTracing
     {
     public:
-        IDxcCompilerPtr m_pDxcCompiler;
-        IDxcLibraryPtr m_pLibrary;
-        IDxcValidatorPtr m_dxcValidator;
+
         ID3D12StateObjectPtr m_pRtPipelineState;
         ID3D12ResourcePtr m_pShaderTable;
         ID3D12RootSignaturePtr m_pGlobalRootSig;
 
-        std::vector<SDXMeshInstanceInfo>m_dxMeshInstanceInfos;
+        std::vector<SDx12MeshInstanceInfo>m_dxMeshInstanceInfos;
         
         std::vector<ID3D12ResourcePtr>m_pBLASs;
 
-        CDXDescManager m_rtDescManager;
+        CDx12DescManager m_rtDescManager;
 
         ID3D12ResourcePtr m_ptlas;
 
         SShaderResources m_rtResouces;
         uint32_t m_rangeIndex[4];
 
-#if ENABLE_PIX_FRAME_CAPTURE
-        HMODULE m_pixModule;
-#endif
     };
 
     static CDXDevice* pDXDevice = nullptr;
     static CDXRasterization* pDXRasterization = nullptr;
     static CDXRayTracing* pDXRayTracing = nullptr;
-
-    //https://github.com/NVIDIAGameWorks/DxrTutorials
-    /***************************************************************************
-    # Copyright (c) 2018, NVIDIA CORPORATION. All rights reserved.
-    #
-    # Redistribution and use in source and binary forms, with or without
-    # modification, are permitted provided that the following conditions
-    # are met:
-    #  * Redistributions of source code must retain the above copyright
-    #    notice, this list of conditions and the following disclaimer.
-    #  * Redistributions in binary form must reproduce the above copyright
-    #    notice, this list of conditions and the following disclaimer in the
-    #    documentation and/or other materials provided with the distribution.
-    #  * Neither the name of NVIDIA CORPORATION nor the names of its
-    #    contributors may be used to endorse or promote products derived
-    #    from this software without specific prior written permission.
-    #
-    # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-    # EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-    # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-    # PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-    # CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-    # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-    # PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-    # PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-    # OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-    # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-    # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-    ***************************************************************************/
-
-    // init dxr
-    ID3D12Device5Ptr CreateDevice(IDXGIFactory4Ptr pDxgiFactory)
-    {
-        IDXGIAdapter1Ptr pAdapter;
-
-        for (uint32_t i = 0; DXGI_ERROR_NOT_FOUND != pDxgiFactory->EnumAdapters1(i, &pAdapter); i++)
-        {
-            DXGI_ADAPTER_DESC1 desc;
-            pAdapter->GetDesc1(&desc);
-
-            if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
-            {
-                continue;
-            }
-
-#ifdef ENABLE_DX12_DEBUG_LAYER
-            ID3D12DebugPtr pDx12Debug;
-            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&pDx12Debug))))
-            {
-                pDx12Debug->EnableDebugLayer();
-            }
-#endif
-            ID3D12Device5Ptr pDevice;
-            ThrowIfFailed(D3D12CreateDevice(pAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&pDevice)));
-
-            D3D12_FEATURE_DATA_D3D12_OPTIONS5 features5;
-            HRESULT hr = pDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &features5, sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS5));
-            if (SUCCEEDED(hr) && features5.RaytracingTier != D3D12_RAYTRACING_TIER_NOT_SUPPORTED)
-            {
-                return pDevice;
-            }
-        }
-
-        ThrowIfFailed(-1);
-        return nullptr;
-    }
-
-    
-
-    ID3D12CommandQueuePtr CreateCommandQueue(ID3D12Device5Ptr pDevice)
-    {
-        ID3D12CommandQueuePtr pQueue;
-        D3D12_COMMAND_QUEUE_DESC cqDesc = {};
-        cqDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-        cqDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        ThrowIfFailed(pDevice->CreateCommandQueue(&cqDesc, IID_PPV_ARGS(&pQueue)));
-        return pQueue;
-    }
 
 	void hwrtl::Init()
 	{
@@ -717,14 +681,14 @@ namespace hwrtl
         pDXRayTracing = new CDXRayTracing();
 
 #if ENABLE_PIX_FRAME_CAPTURE
-        pDXRayTracing->m_pixModule = PIXLoadLatestWinPixGpuCapturerLibrary();
+        pDXDevice->m_pixModule = PIXLoadLatestWinPixGpuCapturerLibrary();
 #endif
 
 		IDXGIFactory4Ptr pDxgiFactory;
         ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&pDxgiFactory)));
         
-        pDXDevice->m_pDevice = CreateDevice(pDxgiFactory);
-        pDXDevice->m_pCmdQueue = CreateCommandQueue(pDXDevice->m_pDevice);
+        pDXDevice->m_pDevice = Dx12CreateDevice(pDxgiFactory);
+        pDXDevice->m_pCmdQueue = Dx12CreateCommandQueue(pDXDevice->m_pDevice);
 
         // create desc heap
         pDXRayTracing->m_rtDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
@@ -740,16 +704,12 @@ namespace hwrtl
         ThrowIfFailed(pDXDevice->m_pDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pDXDevice->m_pFence)));
         pDXDevice->m_FenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-        //https://github.com/Wumpf/nvidia-dxr-tutorial/issues/2
-        //https://www.wihlidal.com/blog/pipeline/2018-09-16-dxil-signing-post-compile/
-        ThrowIfFailed(DxcCreateInstance(CLSID_DxcValidator, IID_PPV_ARGS(&pDXRayTracing->m_dxcValidator)));
-        ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&pDXRayTracing->m_pDxcCompiler)));
-        ThrowIfFailed(DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&pDXRayTracing->m_pLibrary)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcValidator, IID_PPV_ARGS(&pDXDevice->m_dxcValidator)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&pDXDevice->m_pDxcCompiler)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&pDXDevice->m_pLibrary)));
 
 #if ENABLE_PIX_FRAME_CAPTURE
-        std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_dx12.cpp");
-        std::wstring pixPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"HWRT\\pix.wpix";
-
+        std::wstring pixPath = WstringConverter().from_bytes(__FILE__).substr(0, WstringConverter().from_bytes(__FILE__).find(L"hwrtl_dx12.cpp")) + L"HWRT\\pix.wpix";
         PIXCaptureParameters pixCaptureParameters;
         pixCaptureParameters.GpuCaptureParameters.FileName = pixPath.c_str();
         PIXBeginCapture(PIX_CAPTURE_GPU, &pixCaptureParameters);
@@ -807,6 +767,92 @@ namespace hwrtl
         return pBuffer;
     }
 
+    /***************************************************************************
+    * Texture Create And Manage Functions
+    * 1. Create Texture2D
+    ***************************************************************************/
+
+    struct CDx12Resouce
+    {
+        ID3D12ResourcePtr m_pResource;
+        D3D12_RESOURCE_STATES m_resourceState;
+    };
+
+    struct CDx12View
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE m_pCpuDescHandle;
+        D3D12_GPU_DESCRIPTOR_HANDLE m_pGpuDescHandle;
+    };
+
+    class CDxTexture2D : public CTexture2D
+    {
+    public:
+        ~CDxTexture2D()
+        {
+            // Release Desc In Desc Manager
+        }
+
+        CDx12Resouce m_dxResource;
+
+        CDx12View m_uav;
+        CDx12View m_srv;
+        CDx12View m_rtv;
+        CDx12View m_dsv;
+    };
+
+    SResourceHandle hwrtl::CreateTexture2D(STextureCreateDesc texCreateDesc)
+    {
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+        CDXResouceManager& resManager = pDXDevice->m_resouManager;
+
+        D3D12_RESOURCE_DESC resDesc = {};
+        resDesc.DepthOrArraySize = 1;
+        resDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        resDesc.Format = Dx12ConvertTextureFormat(texCreateDesc.m_eTexFormat);
+        resDesc.Flags = Dx12ConvertResouceFlags(texCreateDesc.m_eTexUsage);
+        resDesc.Width = texCreateDesc.m_width;
+        resDesc.Height = texCreateDesc.m_height;
+        resDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        resDesc.MipLevels = 1;
+        resDesc.SampleDesc.Count = 1;
+
+        D3D12_RESOURCE_STATES InitialResourceState = D3D12_RESOURCE_STATE_COMMON;
+        uint32_t allocIndex;
+        ThrowIfFailed(pDevice->CreateCommittedResource(&defaultHeapProperies, D3D12_HEAP_FLAG_NONE, &resDesc, InitialResourceState, nullptr, IID_PPV_ARGS(&resManager.AllocResource(allocIndex))));
+        resManager.SetResouceCurrentState(allocIndex, InitialResourceState);
+
+        CDx12DescManager& csuDescManager = pDXDevice->m_csuDescManager;
+        CDx12DescManager& rtvDescManager = pDXDevice->m_rtvDescManager;
+
+        if (uint32_t(texCreateDesc.m_eTexUsage & ETexUsage::USAGE_SRV))
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Format = resDesc.Format;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MipLevels = 1;
+
+            uint32_t srvIndex = csuDescManager.AllocDesc();
+
+            pDevice->CreateShaderResourceView(resManager.GetResource(allocIndex), &srvDesc, csuDescManager.GetCPUHandle(srvIndex));
+            resManager.SetCSUIndex(allocIndex, srvIndex);
+        }
+
+        if (uint32_t(texCreateDesc.m_eTexUsage & ETexUsage::USAGE_RTV))
+        {
+            D3D12_RENDER_TARGET_VIEW_DESC rtvDesc;
+            rtvDesc.Format = resDesc.Format;
+            rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+
+            uint32_t rtvIndex = rtvDescManager.AllocDesc();
+
+            pDevice->CreateRenderTargetView(resManager.GetResource(allocIndex), nullptr, rtvDescManager.GetCPUHandle(rtvIndex));
+            resManager.SetRTVIndex(allocIndex, rtvIndex);
+        }
+
+        return SResourceHandle(allocIndex);
+    }
+
     EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc,SResourceHandle vbResouce)
     {
         const uint32_t nVertexCount = meshInstancesDesc.m_nVertexCount;
@@ -833,7 +879,7 @@ namespace hwrtl
             return EAddMeshInstancesResult::INVALID_INSTANCE_INFO_NUM;
         }
 
-        SDXMeshInstanceInfo dxMeshInstanceInfo;
+        SDx12MeshInstanceInfo dxMeshInstanceInfo;
         dxMeshInstanceInfo.m_nIndexStride = meshInstancesDesc.m_nIndexStride;
         dxMeshInstanceInfo.m_nVertexCount = meshInstancesDesc.m_nVertexCount;
         dxMeshInstanceInfo.m_nIndexCount = meshInstancesDesc.m_nIndexCount;
@@ -856,7 +902,7 @@ namespace hwrtl
         ID3D12CommandAllocatorPtr pCmdAlloc = pDXDevice->m_pCmdAllocator;
         ThrowIfFailed(pCmdList->Reset(pCmdAlloc, nullptr));
 
-        const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pDXRayTracing->m_dxMeshInstanceInfos;
+        const std::vector<SDx12MeshInstanceInfo> dxMeshInstanceInfos = pDXRayTracing->m_dxMeshInstanceInfos;
         std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geomDescs ;
         std::vector<ID3D12ResourcePtr>pScratchSource;
         std::vector<ID3D12ResourcePtr>pResultSource;
@@ -865,7 +911,7 @@ namespace hwrtl
         for (uint32_t i = 0; i < dxMeshInstanceInfos.size(); i++)
         {
             D3D12_RAYTRACING_GEOMETRY_DESC geomDesc = {};
-            const SDXMeshInstanceInfo& dxMeshInstanceInfo = dxMeshInstanceInfos[i];
+            const SDx12MeshInstanceInfo& dxMeshInstanceInfo = dxMeshInstanceInfos[i];
             geomDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
             geomDesc.Triangles.VertexBuffer.StartAddress = dxMeshInstanceInfo.m_pPositionBuffer->GetGPUVirtualAddress();
             geomDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(Vec3);
@@ -918,20 +964,7 @@ namespace hwrtl
         ResetCmdList();
     }
 
-    D3D12_RAYTRACING_INSTANCE_FLAGS ConvertToDXInstanceFlag(EInstanceFlag instanceFlag)
-    {
-        switch (instanceFlag)
-        {
-        case EInstanceFlag::CULL_DISABLE:
-            return D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
-        case EInstanceFlag::FRONTFACE_CCW:
-            return D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
-        default:
-            return D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
-        }
-    }
-
-    SDXAccelerationStructureBuffers BuildTopLevelAccelerationStructure()
+    SDx12AccelerationStructureBuffers BuildTopLevelAccelerationStructure()
     {
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
         ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
@@ -939,7 +972,7 @@ namespace hwrtl
         ThrowIfFailed(pCmdList->Reset(pCmdAlloc, nullptr));
 
         uint32_t totalInstanceNum = 0;
-        const std::vector<SDXMeshInstanceInfo> dxMeshInstanceInfos = pDXRayTracing->m_dxMeshInstanceInfos;
+        const std::vector<SDx12MeshInstanceInfo> dxMeshInstanceInfos = pDXRayTracing->m_dxMeshInstanceInfos;
         for (uint32_t i = 0; i < dxMeshInstanceInfos.size(); i++)
         {
             totalInstanceNum += dxMeshInstanceInfos[i].instanes.size();
@@ -968,7 +1001,7 @@ namespace hwrtl
                 const SMeshInstanceInfo& meshInstanceInfo = dxMeshInstanceInfos[indexMesh].instanes[indexInstance];
                 instanceDescs[indexMesh].InstanceID = 0;                            // This value will be exposed to the shader via InstanceID()
                 instanceDescs[indexMesh].InstanceContributionToHitGroupIndex = 0;   // This is the offset inside the shader-table. We only have a single geometry, so the offset 0
-                instanceDescs[indexMesh].Flags = ConvertToDXInstanceFlag(meshInstanceInfo.m_instanceFlag);
+                instanceDescs[indexMesh].Flags = Dx12ConvertInstanceFlag(meshInstanceInfo.m_instanceFlag);
                 memcpy(instanceDescs[indexMesh].Transform, &meshInstanceInfo.m_transform, sizeof(instanceDescs[indexMesh].Transform));
                 
                 //TODO:
@@ -993,7 +1026,7 @@ namespace hwrtl
         uavBarrier.UAV.pResource = pResult;
         pCmdList->ResourceBarrier(1, &uavBarrier);
 
-        SDXAccelerationStructureBuffers resultBuffers;
+        SDx12AccelerationStructureBuffers resultBuffers;
         resultBuffers.pResult = pResult;
         resultBuffers.pScratch = pScratch;
         resultBuffers.pInstanceDesc = pInstanceDescBuffer;
@@ -1005,20 +1038,16 @@ namespace hwrtl
         return resultBuffers;
     }
 
-
     void hwrtl::BuildAccelerationStructure()
     {
         ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
         
-
         BuildBottomLevelAccelerationStructure();
-        SDXAccelerationStructureBuffers topLevelBuffers = BuildTopLevelAccelerationStructure();
+        SDx12AccelerationStructureBuffers topLevelBuffers = BuildTopLevelAccelerationStructure();
         pDXRayTracing->m_ptlas = topLevelBuffers.pResult;
-
-        
     }
 
-    IDxcBlobPtr CompileLibraryDXC(const std::wstring& shaderPath, LPCWSTR pEntryPoint, LPCWSTR pTargetProfile)
+    IDxcBlobPtr Dx12CompileRayTracingLibraryDXC(const std::wstring& shaderPath, LPCWSTR pEntryPoint, LPCWSTR pTargetProfile)
     {
         std::ifstream shaderFile(shaderPath);
 
@@ -1032,10 +1061,10 @@ namespace hwrtl
         std::string shader = strStream.str();
 
         IDxcBlobEncodingPtr pTextBlob;
-        ThrowIfFailed(pDXRayTracing->m_pLibrary->CreateBlobWithEncodingFromPinned((LPBYTE)shader.c_str(), (uint32_t)shader.size(), 0, &pTextBlob));
+        ThrowIfFailed(pDXDevice->m_pLibrary->CreateBlobWithEncodingFromPinned((LPBYTE)shader.c_str(), (uint32_t)shader.size(), 0, &pTextBlob));
 
         IDxcOperationResultPtr pResult;
-        ThrowIfFailed(pDXRayTracing->m_pDxcCompiler->Compile(pTextBlob, shaderPath.data(), pEntryPoint, pTargetProfile, nullptr, 0, nullptr, 0, nullptr, &pResult));
+        ThrowIfFailed(pDXDevice->m_pDxcCompiler->Compile(pTextBlob, shaderPath.data(), pEntryPoint, pTargetProfile, nullptr, 0, nullptr, 0, nullptr, &pResult));
 
         HRESULT resultCode;
         ThrowIfFailed(pResult->GetStatus(&resultCode));
@@ -1052,7 +1081,7 @@ namespace hwrtl
         ThrowIfFailed(pResult->GetResult(&pBlob));
 
         IDxcOperationResultPtr pValidResult;
-        pDXRayTracing->m_dxcValidator->Validate(pBlob, DxcValidatorFlags_InPlaceEdit, &pValidResult);
+        pDXDevice->m_dxcValidator->Validate(pBlob, DxcValidatorFlags_InPlaceEdit, &pValidResult);
 
         HRESULT validateStatus;
         pValidResult->GetStatus(&validateStatus);
@@ -1227,7 +1256,7 @@ namespace hwrtl
         uint32_t subObjectsIndex = 0;
 
         // create dxil subobjects
-        ID3DBlobPtr pDxilLib = CompileLibraryDXC(shaderPath, L"", L"lib_6_3");
+        ID3DBlobPtr pDxilLib = Dx12CompileRayTracingLibraryDXC(shaderPath, L"", L"lib_6_3");
         SDxilLibrary dxilLib(pDxilLib, pEntryPoint.data(), pEntryPoint.size());
         stateSubObjects[subObjectsIndex] = dxilLib.m_stateSubobject;
         subObjectsIndex++;
@@ -1395,90 +1424,14 @@ namespace hwrtl
         return std::make_shared<CDxRayTracingPipelineState>(rtInitDesc);
     }
 
-#define CHECK_AND_ADD_FLAG(eTexUsage,eCheckUsage,eAddedFlag,nullFlag) (((uint32_t(eTexUsage) & uint32_t(eCheckUsage)) != 0) ? eAddedFlag : nullFlag)
 
-    static D3D12_RESOURCE_FLAGS ConvertUsageToDxFlag(ETexUsage eTexUsage)
-    {
-        D3D12_RESOURCE_FLAGS resouceFlags = D3D12_RESOURCE_FLAG_NONE;
-        resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_UAV, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_NONE);
-        resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_RTV, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_NONE);
-        resouceFlags |= CHECK_AND_ADD_FLAG(eTexUsage, ETexUsage::USAGE_DSV, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_NONE);
-        return resouceFlags;
-    }
-
-    static DXGI_FORMAT ConvertTexFormatToDxFormat(ETexFormat eTexFormat)
-    {
-        switch (eTexFormat)
-        {
-        case ETexFormat::FT_RGBA8_UNORM:
-            return DXGI_FORMAT_R8G8B8A8_UNORM;
-            break;
-        case ETexFormat::FT_RGBA32_FLOAT:
-            return DXGI_FORMAT_R32G32B32A32_FLOAT;
-            break;
-        }
-        ThrowIfFailed(-1);
-        return DXGI_FORMAT_UNKNOWN;
-    }
 
     bool ValidateResource()
     {
         return true;
     }
 
-    SResourceHandle hwrtl::CreateTexture2D(STextureCreateDesc texCreateDesc)
-    {
-        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
-
-        CDXResouceManager& resManager = pDXDevice->m_resouManager;
-
-        D3D12_RESOURCE_DESC resDesc = {};
-        resDesc.DepthOrArraySize = 1;
-        resDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        resDesc.Format = ConvertTexFormatToDxFormat(texCreateDesc.m_eTexFormat);
-        resDesc.Flags = ConvertUsageToDxFlag(texCreateDesc.m_eTexUsage);
-        resDesc.Width = texCreateDesc.m_width;
-        resDesc.Height = texCreateDesc.m_height;
-        resDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        resDesc.MipLevels = 1;
-        resDesc.SampleDesc.Count = 1;
-
-        D3D12_RESOURCE_STATES InitialResourceState = D3D12_RESOURCE_STATE_COMMON;
-        uint32_t allocIndex;
-        ThrowIfFailed(pDevice->CreateCommittedResource(&defaultHeapProperies, D3D12_HEAP_FLAG_NONE, &resDesc, InitialResourceState, nullptr, IID_PPV_ARGS(&resManager.AllocResource(allocIndex))));
-        resManager.SetResouceCurrentState(allocIndex, InitialResourceState);
-
-        CDXDescManager& csuDescManager = pDXDevice->m_csuDescManager;
-        CDXDescManager& rtvDescManager = pDXDevice->m_rtvDescManager;
-
-        if (uint32_t(texCreateDesc.m_eTexUsage & ETexUsage::USAGE_SRV))
-        {
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.Format = resDesc.Format;
-            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            srvDesc.Texture2D.MipLevels = 1;
-
-            uint32_t srvIndex = csuDescManager.AllocDesc();
-
-            pDevice->CreateShaderResourceView(resManager.GetResource(allocIndex), &srvDesc, csuDescManager.GetCPUHandle(srvIndex));
-            resManager.SetCSUIndex(allocIndex, srvIndex);
-        }
-
-        if (uint32_t(texCreateDesc.m_eTexUsage & ETexUsage::USAGE_RTV))
-        {
-            D3D12_RENDER_TARGET_VIEW_DESC rtvDesc;
-            rtvDesc.Format = resDesc.Format;
-            rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-
-            uint32_t rtvIndex = rtvDescManager.AllocDesc();
-
-            pDevice->CreateRenderTargetView(resManager.GetResource(allocIndex), nullptr, rtvDescManager.GetCPUHandle(rtvIndex));
-            resManager.SetRTVIndex(allocIndex, rtvIndex);
-        }
-
-        return SResourceHandle(allocIndex);
-    }
+    
 
     SResourceHandle hwrtl::CreateDepthStencil(STextureCreateDesc dsCreateDesc)
     {
@@ -1526,7 +1479,7 @@ namespace hwrtl
         uint32_t allocIndex = 0;
         ID3D12ResourcePtr& resource = pDXDevice->m_resouManager.AllocResource(allocIndex);
         CDXResouceManager& resManager = pDXDevice->m_resouManager;
-        CDXDescManager& csuDescManager = pDXDevice->m_csuDescManager;
+        CDx12DescManager& csuDescManager = pDXDevice->m_csuDescManager;
         auto pDevice = pDXDevice->m_pDevice;
 
         if (bufferUsage == EBufferUsage::USAGE_VB || bufferUsage == EBufferUsage::USAGE_IB)
@@ -1542,8 +1495,6 @@ namespace hwrtl
         }
         else if (bufferUsage == EBufferUsage::USAGE_CB)
         {
-            
-           
             //temporary code
             if (pInitData != nullptr)
             {
@@ -1607,7 +1558,7 @@ namespace hwrtl
         resource->Unmap(0, nullptr);
     }
 
-    void hwrtl::TempResetCommand()
+    void hwrtl::ResetCommandList()
     {
         ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
         ID3D12CommandAllocatorPtr pCmdAlloc = pDXDevice->m_pCmdAllocator;
@@ -1863,7 +1814,7 @@ namespace hwrtl
                 LPCWSTR pTarget = bVS ? L"vs_6_1" : L"ps_6_1";
                 uint32_t shaderIndex = bVS ? 0 : 1;
                 
-                shaders[shaderIndex] = CompileLibraryDXC(shaderPath.c_str(), rtShaders[index].m_entryPoint.c_str(), pTarget);
+                shaders[shaderIndex] = Dx12CompileRayTracingLibraryDXC(shaderPath.c_str(), rtShaders[index].m_entryPoint.c_str(), pTarget);
             }
 
             std::vector<D3D12_INPUT_ELEMENT_DESC>inputElementDescs;
@@ -1929,7 +1880,7 @@ namespace hwrtl
             psoDesc.NumRenderTargets = rtFormats.size();
             for (uint32_t index = 0; index < rtFormats.size(); index++)
             {
-                psoDesc.RTVFormats[index] = ConvertTexFormatToDxFormat(rtFormats[index]);
+                psoDesc.RTVFormats[index] = Dx12ConvertTextureFormat(rtFormats[index]);
             }
             psoDesc.SampleDesc.Count = 1;
             ThrowIfFailed(pDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pRSPipelinState)));
