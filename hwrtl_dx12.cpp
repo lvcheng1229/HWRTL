@@ -46,6 +46,11 @@ SOFTWARE.
 //      13. ERayShaderType to ERayShaderType and EShaderType
 //      14. SetShaderResource support raster rization
 //      15. state tracking: remove redundant barrier
+//      16. constant buffer: static/dynamic
+//      17. structure buffer: static/dynamic uav/srv
+//      18. remove help header : d3dx12.h see : DeviceCreateStructBuffer in xengine
+//      19. get immediate cmd list for create and upload buffer
+//
 
 
 #include "HWRTL.h"
@@ -1520,7 +1525,10 @@ namespace hwrtl
     {
         uint32_t allocIndex = 0;
         ID3D12ResourcePtr& resource = pDXDevice->m_resouManager.AllocResource(allocIndex);
-        
+        CDXResouceManager& resManager = pDXDevice->m_resouManager;
+        CDXDescManager& csuDescManager = pDXDevice->m_csuDescManager;
+        auto pDevice = pDXDevice->m_pDevice;
+
         if (bufferUsage == EBufferUsage::USAGE_VB || bufferUsage == EBufferUsage::USAGE_IB)
         {
             resource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
@@ -1534,10 +1542,8 @@ namespace hwrtl
         }
         else if (bufferUsage == EBufferUsage::USAGE_CB)
         {
-            auto pDevice = pDXDevice->m_pDevice;
-            CDXResouceManager& resManager = pDXDevice->m_resouManager;
-            CDXDescManager& csuDescManager = pDXDevice->m_csuDescManager;
-
+            
+           
             //temporary code
             if (pInitData != nullptr)
             {
@@ -1567,6 +1573,26 @@ namespace hwrtl
             //    //resource->Unmap(0, &readRange);
             //}
         }
+        else if (bufferUsage == EBufferUsage::USAGE_Structure)
+        {
+            resource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
+            srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Buffer.FirstElement = 0;
+            srvDesc.Buffer.NumElements = nByteSize / nStride;
+            srvDesc.Buffer.StructureByteStride = nStride;
+            srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+
+            resManager.SetResouceCurrentState(allocIndex, D3D12_RESOURCE_STATE_GENERIC_READ);
+
+            uint32_t srvIndex = csuDescManager.AllocDesc();
+            pDevice->CreateShaderResourceView(resManager.GetResource(allocIndex), &srvDesc, csuDescManager.GetCPUHandle(srvIndex));
+            pDXDevice->m_resouManager.SetCSUIndex(allocIndex, srvIndex);
+            resManager.SetCSUIndex(allocIndex, srvIndex);
+        }
         
         return allocIndex;
     }
@@ -1579,6 +1605,13 @@ namespace hwrtl
         ThrowIfFailed(resource->Map(0, &readRange, reinterpret_cast<void**>(&cbvDataPtr)));
         memcpy(cbvDataPtr, &pData, sizeof(nByteSize));
         resource->Unmap(0, nullptr);
+    }
+
+    void hwrtl::TempResetCommand()
+    {
+        ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+        ID3D12CommandAllocatorPtr pCmdAlloc = pDXDevice->m_pCmdAllocator;
+        ThrowIfFailed(pCmdList->Reset(pCmdAlloc, nullptr));
     }
 
     void hwrtl::SubmitCommandlist()
@@ -1612,7 +1645,7 @@ namespace hwrtl
             //TODO: MoveToCreate Texture2D
             UINT destStart = bindIndex + pDXRayTracing->m_rangeIndex[uint32_t(ESlotType::ST_T)];
         
-            D3D12_CPU_DESCRIPTOR_HANDLE destPos = pDXRayTracing->m_rtDescManager.GetCPUHandle(bindIndex);
+            D3D12_CPU_DESCRIPTOR_HANDLE destPos = pDXRayTracing->m_rtDescManager.GetCPUHandle(destStart);
             uint32_t indexHandle = pDXDevice->m_resouManager.GetCSUIndex(resource);
             D3D12_CPU_DESCRIPTOR_HANDLE srcHandle = pDXDevice->m_csuDescManager.GetCPUHandle(indexHandle);
             
@@ -1642,7 +1675,10 @@ namespace hwrtl
         barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
         pDXDevice->m_resouManager.SetResouceCurrentState(resource, stateAfter);
-        pDXDevice->m_resouceBarriers.push_back(barrier);
+        if (barrier.Transition.StateBefore != barrier.Transition.StateAfter)
+        {
+            pDXDevice->m_resouceBarriers.push_back(barrier);
+        }
 
         ValidateResource();
     }

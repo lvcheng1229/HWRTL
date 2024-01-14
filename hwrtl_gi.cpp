@@ -423,6 +423,8 @@ namespace gi
         Vec2i m_nAtlasSize;
         uint32_t m_nAtlasNum;
 
+        SResourceHandle m_hRtSceneLight;
+
         std::shared_ptr<CGraphicsPipelineState>m_pLightMapGBufferPSO;
         std::shared_ptr<CRayTracingPipelineState>m_pRayTracingPSO;
         std::shared_ptr<CGraphicsPipelineState>m_pVisualizeGIPSO;
@@ -631,6 +633,8 @@ namespace gi
             resTexCreateDesc.m_eTexUsage = ETexUsage::USAGE_SRV | ETexUsage::USAGE_UAV;
             atlas.m_resultTexture = CreateTexture2D(resTexCreateDesc);
         }
+
+
     }
 
     static void PrePareGBufferPassPSO()
@@ -728,6 +732,18 @@ namespace gi
     {
         BuildAccelerationStructure();
 
+        //TODO
+        TempResetCommand();
+        struct SRayTracingLight
+        {
+            Vec3 m_color;
+        };
+        SRayTracingLight light = { Vec3(1.0,1.0,1.0) };
+        pGiBaker->m_hRtSceneLight = CreateBuffer(&light, sizeof(SRayTracingLight), sizeof(SRayTracingLight), EBufferUsage::USAGE_Structure);
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
+
         std::vector<SShader>rtShaders;
         rtShaders.push_back(SShader{ ERayShaderType::RAY_RGS,L"LightMapRayTracingRayGen" });
         rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"ClostHitMain" });
@@ -736,7 +752,7 @@ namespace gi
         std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_gi.cpp");
         std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
 
-        pGiBaker->m_pRayTracingPSO = CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 2,1,0,0 });
+        pGiBaker->m_pRayTracingPSO = CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 3,1,0,0 });
     }
 
     void hwrtl::gi::ExecuteLightMapRayTracingPass()
@@ -747,8 +763,11 @@ namespace gi
 
             BeginRayTracing();
             SetShaderResource(atlas.m_resultTexture, ESlotType::ST_U, 0);
-            SetShaderResource(atlas.m_hPosTexture, ESlotType::ST_T, 1);
+            
             SetTLAS(0);
+            SetShaderResource(atlas.m_hPosTexture, ESlotType::ST_T, 1);
+            SetShaderResource(pGiBaker->m_hRtSceneLight, ESlotType::ST_T, 2);
+            
             DispatchRayTracicing(pGiBaker->m_pRayTracingPSO, pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
             SubmitCommandlist();
@@ -786,7 +805,7 @@ namespace gi
         SResourceHandle resouceHandle = CreateTexture2D(texCreateDesc);
         SResourceHandle dsHandle = CreateDepthStencil(dsCreateDesc);
 
-        Vec3 eyePosition = Vec3(0, -6, 3);
+        Vec3 eyePosition = Vec3(0, -12, 6);
         Vec3 eyeDirection = Vec3(0, 1, 0); // focus - eyePos
         Vec3 upDirection = Vec3(0, 0, 1);
 

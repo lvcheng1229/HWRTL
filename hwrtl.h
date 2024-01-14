@@ -347,6 +347,7 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		USAGE_VB = 0, // vertex buffer
 		USAGE_IB, // index buffer
 		USAGE_CB, // constant buffer
+		USAGE_Structure, // structure buffer
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(EBufferUsage);
 
@@ -435,6 +436,7 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	SResourceHandle CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage);
 	void UpdateConstantBuffer(SResourceHandle resourceHandle, uint64_t nByteSize, const void* pData);
 	void SubmitCommand();
+	void TempResetCommand();
 
 	// ray tracing pipeline
 	EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc, SResourceHandle vbResouce);

@@ -78,9 +78,15 @@ SLightMapGBufferOutput LightMapGBufferGenPS(SGeometryVS2PS IN)
 
 #define RAY_TRACING_MASK_OPAQUE				0x01
 
+struct SRayTracingLight
+{
+    float3 color;
+};
+
 
 RaytracingAccelerationStructure rtScene : register(t0);
 Texture2D<float4> rtWorldPosition : register(t1);
+StructuredBuffer<SRayTracingLight> rtSceneLights : register(t2);
 
 RWTexture2D<float4> rtOutput : register(u0);
 
@@ -101,7 +107,7 @@ void LightMapRayTracingRayGen()
 {
     const uint2 rayIndex = DispatchRaysIndex().xy;
     float3 worldPosition = rtWorldPosition[rayIndex].xyz;
-    if (all(abs(worldPosition)) < 0.01)
+    if (abs(worldPosition.x) < 0.0001 && abs(worldPosition.y) < 0.0001 && abs(worldPosition.z) < 0.0001)
     {
         rtOutput[rayIndex] = float4(0.0, 0.0, 1.0, 0.0);
         return;
@@ -126,6 +132,8 @@ void LightMapRayTracingRayGen()
 	);
 
     rtOutput[rayIndex] = float4(payload.RetColor, 0.0);
+    rtOutput[rayIndex].y += rtSceneLights[0].color.x;
+
 }
 
 [shader("closesthit")]
@@ -187,6 +195,6 @@ SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
 {
     SVisualizeGIResult output;
     float4 result = visLightMapResult.SampleLevel(gsamPointWarp, IN.lightMapUV, 0.0);
-    output.giResult = float4(result.xyz, 1.0);
+    output.giResult = float4(result.x, IN.lightMapUV, 1.0);
     return output;
 }
