@@ -132,7 +132,7 @@ namespace pvs
 
 	void GenerateVisibility()
 	{
-		BuildAccelerationStructure();
+		//BuildAccelerationStructure();
 		std::vector<SShader>rtShaders;
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_RGS,L"rayGen"});
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_MIH,L"miss"});
@@ -147,11 +147,11 @@ namespace pvs
 	CDynamicBitSet GetVisibility(uint32_t cellIndex)
 	{
 		STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_UAV,ETexFormat::FT_RGBA8_UNORM,512,512 };
-		SResourceHandle bufferHandle = CreateTexture2D(texCreateDesc);
+		//SResourceHandle bufferHandle = CreateTexture2D(texCreateDesc);
 
-		BeginRayTracing();
-		SetShaderResource(bufferHandle, ESlotType::ST_U, 0);
-		SetTLAS(0);
+		//BeginRayTracing();
+		//SetShaderResource(bufferHandle, ESlotType::ST_U, 0);
+		//SetTLAS(0);
 		//DispatchRayTracicing(512,512);
 		return CDynamicBitSet();
 	}

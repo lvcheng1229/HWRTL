@@ -408,9 +408,9 @@ namespace gi
     {
         std::vector<SGIMesh>m_atlasGeometries;
 
-        SResourceHandle m_hPosTexture;
-        SResourceHandle m_hNormalTexture;
-        SResourceHandle m_resultTexture;
+        std::shared_ptr<CTexture2D> m_hPosTexture;
+        std::shared_ptr<CTexture2D> m_hNormalTexture;
+        std::shared_ptr<CTexture2D> m_resultTexture;
     };
 
 	class CGIBaker
@@ -425,9 +425,15 @@ namespace gi
 
         SResourceHandle m_hRtSceneLight;
 
+        std::shared_ptr <CDeviceCommand> m_pDeviceCommand;
+
         std::shared_ptr<CGraphicsPipelineState>m_pLightMapGBufferPSO;
         std::shared_ptr<CRayTracingPipelineState>m_pRayTracingPSO;
         std::shared_ptr<CGraphicsPipelineState>m_pVisualizeGIPSO;
+
+        std::shared_ptr<CTopLevelAccelerationStructure> m_pTLAS;
+
+        std::shared_ptr<CRayTracingContext> m_pLightMapRayTracingContext;
 	};
 
 	static CGIBaker* pGiBaker = nullptr;
@@ -437,6 +443,8 @@ namespace gi
 		Init();
 		pGiBaker = new CGIBaker();
         pGiBaker->m_bakeConfig = bakeConfig;
+
+        pGiBaker->m_pDeviceCommand = CreateDeviceCommand();
 	}
 
 	void hwrtl::gi::AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc)
@@ -670,17 +678,19 @@ namespace gi
         {
             SAtlas& atlas = pGiBaker->m_atlas[index];
 
-            SResourceHandle posTex = atlas.m_hPosTexture;
-            SResourceHandle normTex = atlas.m_hNormalTexture;
+            std::shared_ptr<CTexture2D> posTex = atlas.m_hPosTexture;
+            std::shared_ptr<CTexture2D> normTex = atlas.m_hNormalTexture;
 
-            SResourceHandle resouceHandles[2] = { posTex ,normTex };
+            std::vector<std::shared_ptr<CTexture2D>> renderTargets;
+            renderTargets.push_back(posTex);
+            renderTargets.push_back(normTex);
 
             SubmitCommandlist();
             WaitForPreviousFrame();
             ResetCmdList();
 
             BeginRasterization(pGiBaker->m_pLightMapGBufferPSO);
-            SetRenderTargets(resouceHandles, 2, -1, true, true);
+            SetRenderTargets(renderTargets, -1, true, true);
             SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
             for (uint32_t geoIndex = 0; geoIndex < atlas.m_atlasGeometries.size(); geoIndex++)
@@ -728,7 +738,7 @@ namespace gi
 
     void hwrtl::gi::PrePareLightMapRayTracingPass()
     {
-        BuildAccelerationStructure();
+        pGiBaker->m_pTLAS = pGiBaker->m_pDeviceCommand->BuildAccelerationStructure();
 
         //TODO
         ResetCommandList();
@@ -751,26 +761,32 @@ namespace gi
         std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
 
         pGiBaker->m_pRayTracingPSO = CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 3,1,0,0 });
+
+        pGiBaker->m_pLightMapRayTracingContext = CreateRayTracingContext();
     }
 
     void hwrtl::gi::ExecuteLightMapRayTracingPass()
     {
+        std::shared_ptr<CRayTracingContext> pLightMapRayTracingContext = pGiBaker->m_pLightMapRayTracingContext;
+       
+        pLightMapRayTracingContext->BeginRayTacingPasss();
+        pLightMapRayTracingContext->SetRayTracingPipelineState(pGiBaker->m_pRayTracingPSO);
+        
         for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
         {
             SAtlas& atlas = pGiBaker->m_atlas[index];
 
-            BeginRayTracing();
-            SetShaderResource(atlas.m_resultTexture, ESlotType::ST_U, 0);
             
-            SetTLAS(0);
-            SetShaderResource(atlas.m_hPosTexture, ESlotType::ST_T, 1);
-            SetShaderResource(pGiBaker->m_hRtSceneLight, ESlotType::ST_T, 2);
+            pLightMapRayTracingContext->SetShaderUAV(atlas.m_resultTexture, 0);
             
-            DispatchRayTracicing(pGiBaker->m_pRayTracingPSO, pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
+            pLightMapRayTracingContext->SetTLAS(pGiBaker->m_pTLAS,0);
+            pLightMapRayTracingContext->SetShaderSRV(atlas.m_hPosTexture, 1);
+            //SetShaderResource(pGiBaker->m_hRtSceneLight, ESlotType::ST_T, 2);
+            pLightMapRayTracingContext->DispatchRayTracicing(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
-            SubmitCommandlist();
-            WaitForPreviousFrame();
-            ResetCmdList();
+            //SubmitCommandlist();
+            //WaitForPreviousFrame();
+            //ResetCmdList();
         }
     }
 
@@ -800,7 +816,7 @@ namespace gi
         Vec2i visualTex(1024,1024);
         STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,visualTex.x,visualTex.y };
         STextureCreateDesc dsCreateDesc{ ETexUsage::USAGE_DSV,ETexFormat::FT_DepthStencil,visualTex.x,visualTex.y };
-        SResourceHandle resouceHandle = CreateTexture2D(texCreateDesc);
+        std::shared_ptr<CTexture2D> resouceHandle = CreateTexture2D(texCreateDesc);
         SResourceHandle dsHandle = CreateDepthStencil(dsCreateDesc);
 
         Vec3 eyePosition = Vec3(0, -12, 6);
@@ -819,7 +835,10 @@ namespace gi
         viewCB.vpMat = GetViewProjectionMatrixRightHand(eyePosition, eyeDirection, upDirection, fovAngleY, aspectRatio, 0.1, 100.0).GetTrasnpose();
 
         BeginRasterization(pGiBaker->m_pVisualizeGIPSO);
-        SetRenderTargets(&resouceHandle, 1, dsHandle, true, true);
+
+        std::vector<std::shared_ptr<CTexture2D>>renderTargets;
+        renderTargets.push_back(resouceHandle);
+        SetRenderTargets(renderTargets, dsHandle, true, true);
         SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
         SResourceHandle hViewCB = CreateBuffer(&viewCB, sizeof(SViewCB), sizeof(SViewCB), EBufferUsage::USAGE_CB);

@@ -413,16 +413,6 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		{
 			return *((uint32_t*)(this) + index);
 		}
-
-		uint32_t GetPreSumNum(uint32_t index)
-		{
-			uint32_t result = 0;
-			for (uint32_t i = 0; i < index; i++)
-			{
-				result += this->operator[](i);
-			}
-			return result;
-		}
 	};
 
 	// RHI Object Define
@@ -448,12 +438,51 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		virtual ~CTexture2D() {}
 	};
 
+	class CTopLevelAccelerationStructure
+	{
+	public:
+		virtual ~CTopLevelAccelerationStructure() {}
+	};
+
+	class CDeviceCommand
+	{
+	public:
+		virtual std::shared_ptr<CTopLevelAccelerationStructure> BuildAccelerationStructure() = 0;
+	};
+
+	class CContext
+	{
+	public:
+		CContext() {}
+		virtual ~CContext() {}
+	};
+
+	class CRayTracingContext : public CContext
+	{
+	public:
+		CRayTracingContext() {}
+		virtual ~CRayTracingContext() {}
+
+		virtual void BeginRayTacingPasss() = 0;
+		virtual void EndRayTacingPasss() = 0;
+
+		virtual void SetRayTracingPipelineState(std::shared_ptr<CRayTracingPipelineState>rtPipelineState) = 0;
+
+		virtual void SetTLAS(std::shared_ptr<CTopLevelAccelerationStructure> tlas, uint32_t bindIndex) = 0;
+		virtual void SetShaderSRV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex) = 0;
+		virtual void SetShaderUAV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex) = 0;
+
+		virtual void DispatchRayTracicing(uint32_t width, uint32_t height) = 0;
+	};
+
 	void Init();
 	void DestroyScene();
 	void Shutdown();
 
+	std::shared_ptr <CDeviceCommand> CreateDeviceCommand();
+
 	// Common devie commands
-	SResourceHandle CreateTexture2D(STextureCreateDesc texCreateDesc);
+	std::shared_ptr<CTexture2D> CreateTexture2D(STextureCreateDesc texCreateDesc);
 	SResourceHandle CreateDepthStencil(STextureCreateDesc dsCreateDesc);
 	SResourceHandle CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage);
 
@@ -466,14 +495,15 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	void ResetCmdList();
 
 	// Ray tracing commnad
+	std::shared_ptr<CRayTracingContext> CreateRayTracingContext();
+
 	EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc, SResourceHandle vbResouce);
-	void BuildAccelerationStructure();
+	//void BuildAccelerationStructure();
 	std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources);
 	
-	void SetShaderResource(SResourceHandle resource, ESlotType slotType, uint32_t bindIndex);
-	void SetTLAS(uint32_t bindIndex);
-	void BeginRayTracing();
-	void DispatchRayTracicing(std::shared_ptr<CRayTracingPipelineState>rtPipelineState, uint32_t width, uint32_t height);
+	//void SetTLAS(uint32_t bindIndex);
+	//void BeginRayTracing();
+	//void DispatchRayTracicing(std::shared_ptr<CRayTracingPipelineState>rtPipelineState, uint32_t width, uint32_t height);
 
 	// Rasterization commnad
 
@@ -481,9 +511,9 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat);
 
 	void BeginRasterization(std::shared_ptr<CGraphicsPipelineState> graphicsPipelineStata);
-	void SetRenderTargets(SResourceHandle* renderTargets, uint32_t renderTargetNum, SResourceHandle depthStencil = -1, bool bClearRT = true, bool bClearDs = true);
+	void SetRenderTargets(std::vector<std::shared_ptr<CTexture2D>> renderTargets, SResourceHandle depthStencil = -1, bool bClearRT = true, bool bClearDs = true);
 	void SetConstantBuffer(SResourceHandle cbHandle, uint32_t offset);
-	void SetTexture(SResourceHandle cbHandle, uint32_t offset);
+	void SetTexture(std::shared_ptr<CTexture2D>tex2D, uint32_t offset);
 	void SetViewport(float width, float height);
 	void SetVertexBuffers(SResourceHandle* vertexBuffer, uint32_t slotNum = 1);
 	void DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation);
