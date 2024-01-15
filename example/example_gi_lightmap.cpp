@@ -308,7 +308,7 @@ int main()
         SBakeConfig bakeConfig;
         bakeConfig.m_maxAtlasSize = 1024;
         InitGIBaker(bakeConfig);
-        AddBakeMeshs(sceneMesh);
+        AddBakeMeshsAndCreateVB(sceneMesh);
         PrePareLightMapGBufferPass();
         ExecuteLightMapGBufferPass();
         PrePareLightMapRayTracingPass();

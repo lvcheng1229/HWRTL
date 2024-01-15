@@ -393,13 +393,15 @@ namespace gi
 		std::shared_ptr<CBuffer> m_hLightMapUVBuffer;
 		std::shared_ptr<CBuffer> m_hConstantBuffer;
         
+        std::shared_ptr<SGpuBlasData>m_pGpuMeshData;
+
         Vec2i m_nLightMapSize;
         Vec2i m_nAtlasOffset;
         Vec4 m_lightMapScaleAndBias;
 
+        uint32_t m_nVertexCount = 0;
+        
         int m_nAtlasIndex;
-
-		uint32_t vertexCount = 0;
 
         SMeshInstanceInfo m_meshInstanceInfo;
 	};
@@ -438,48 +440,6 @@ namespace gi
 	};
 
 	static CGIBaker* pGiBaker = nullptr;
-
-	void hwrtl::gi::InitGIBaker(SBakeConfig bakeConfig)
-	{
-		Init();
-		pGiBaker = new CGIBaker();
-        pGiBaker->m_bakeConfig = bakeConfig;
-
-        pGiBaker->m_pDeviceCommand = CreateDeviceCommand();
-        pGiBaker->m_pRayTracingContext = CreateRayTracingContext();
-        pGiBaker->m_pGraphicsContext = CreateGraphicsContext();
-	}
-
-	void hwrtl::gi::AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc)
-	{
-		std::vector<SBakeMeshDesc> bakeMeshDescs;
-		bakeMeshDescs.push_back(bakeMeshDesc);
-		AddBakeMeshs(bakeMeshDescs);
-	}
-
-	void hwrtl::gi::AddBakeMeshs(const std::vector<SBakeMeshDesc>& bakeMeshDescs)
-	{
-		for (uint32_t index = 0; index < bakeMeshDescs.size(); index++)
-		{
-			const SBakeMeshDesc& bakeMeshDesc = bakeMeshDescs[index];
-			SMeshInstancesDesc meshInstancesDesc;
-			meshInstancesDesc.instanes.push_back(bakeMeshDesc.m_meshInstanceInfo);
-			meshInstancesDesc.m_pPositionData = bakeMeshDesc.m_pPositionData;
-			meshInstancesDesc.m_pUVData = bakeMeshDesc.m_pLightMapUVData;
-			meshInstancesDesc.m_nVertexCount = bakeMeshDesc.m_nVertexCount;
-			
-			SGIMesh giMesh;
-			giMesh.m_hPositionBuffer = CreateBuffer(bakeMeshDesc.m_pPositionData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
-            giMesh.m_hLightMapUVBuffer = CreateBuffer(bakeMeshDesc.m_pLightMapUVData, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB);
-            
-            giMesh.vertexCount = bakeMeshDesc.m_nVertexCount;
-            giMesh.m_nLightMapSize = bakeMeshDesc.m_nLightMapSize;
-            giMesh.m_meshInstanceInfo = bakeMeshDesc.m_meshInstanceInfo;
-			pGiBaker->m_giMeshes.push_back(giMesh);
-
-			AddRayTracingMeshInstances(meshInstancesDesc, giMesh.m_hPositionBuffer);
-		}
-	}
 
     static int NextPow2(int x)
     {
@@ -668,21 +628,96 @@ namespace gi
         pGiBaker->m_pLightMapGBufferPSO = CreateRSPipelineState(shaderPath, rsShaders, rasterizationResources, vertexLayouts, rtFormats, ETexFormat::FT_None);
     }
 
+    void hwrtl::gi::InitGIBaker(SBakeConfig bakeConfig)
+    {
+        Init();
+        pGiBaker = new CGIBaker();
+        pGiBaker->m_bakeConfig = bakeConfig;
+
+        pGiBaker->m_pDeviceCommand = CreateDeviceCommand();
+        pGiBaker->m_pRayTracingContext = CreateRayTracingContext();
+        pGiBaker->m_pGraphicsContext = CreateGraphicsContext();
+    }
+
+    void hwrtl::gi::AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc)
+    {
+        std::vector<SBakeMeshDesc> bakeMeshDescs;
+        bakeMeshDescs.push_back(bakeMeshDesc);
+        AddBakeMeshsAndCreateVB(bakeMeshDescs);
+    }
+
+    void hwrtl::gi::AddBakeMeshsAndCreateVB(const std::vector<SBakeMeshDesc>& bakeMeshDescs)
+    {
+        for (uint32_t index = 0; index < bakeMeshDescs.size(); index++)
+        {
+            const SBakeMeshDesc& bakeMeshDesc = bakeMeshDescs[index];
+            SGIMesh giMesh;
+            giMesh.m_hPositionBuffer = CreateBuffer(bakeMeshDesc.m_pPositionData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
+            giMesh.m_hLightMapUVBuffer = CreateBuffer(bakeMeshDesc.m_pLightMapUVData, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB);
+
+            giMesh.m_nVertexCount = bakeMeshDesc.m_nVertexCount;
+            giMesh.m_nLightMapSize = bakeMeshDesc.m_nLightMapSize;
+            giMesh.m_meshInstanceInfo = bakeMeshDesc.m_meshInstanceInfo;
+            giMesh.m_pGpuMeshData = std::make_shared<SGpuBlasData>();
+
+            giMesh.m_pGpuMeshData->m_nVertexCount = giMesh.m_nVertexCount;
+            giMesh.m_pGpuMeshData->m_pVertexBuffer = giMesh.m_hPositionBuffer;
+
+            std::vector<SMeshInstanceInfo> instanceInfos;
+            instanceInfos.push_back(giMesh.m_meshInstanceInfo);
+            giMesh.m_pGpuMeshData->instanes = instanceInfos;
+            pGiBaker->m_giMeshes.push_back(giMesh);
+        }
+    }
+
 	void hwrtl::gi::PrePareLightMapGBufferPass()
 	{
-        //pGiBaker->m_pDeviceCommand->ResetCmdAlloc();
-        //pGiBaker->m_pDeviceCommand->OpenCmdList();
-
         PrePareGBufferPassPSO();
         PackMeshIntoAtlas();
         GenerateAtlas();
+
+        for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
+        {
+            SAtlas& atlas = pGiBaker->m_atlas[index];
+            for (uint32_t geoIndex = 0; geoIndex < atlas.m_atlasGeometries.size(); geoIndex++)
+            {
+                SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
+
+                struct SGbufferGenCB
+                {
+                    Matrix44 m_worldTM;
+                    Vec4 lightMapScaleAndBias;
+
+                    float padding[44];
+                }gBufferCbData;
+
+                gBufferCbData.m_worldTM.SetIdentity();
+
+                for (uint32_t i = 0; i < 4; i++)
+                {
+                    for (uint32_t j = 0; j < 3; j++)
+                    {
+                        gBufferCbData.m_worldTM.m[i][j] = giMesh.m_meshInstanceInfo.m_transform[j][i];
+                    }
+                }
+
+                for (uint32_t i = 0; i < 44; i++)
+                {
+                    gBufferCbData.padding[i] = 1.0;
+                }
+
+                gBufferCbData.lightMapScaleAndBias = giMesh.m_lightMapScaleAndBias;
+
+                giMesh.m_hConstantBuffer = CreateBuffer(&gBufferCbData, sizeof(SGbufferGenCB), sizeof(SGbufferGenCB), EBufferUsage::USAGE_CB);
+            }
+        }
 	}
 
 	void hwrtl::gi::ExecuteLightMapGBufferPass()
 	{
-        SubmitCommandlist();
-        WaitForPreviousFrame();
-        ResetCmdList();
+        pGiBaker->m_pDeviceCommand->CloseAndExecuteCmdList();
+        pGiBaker->m_pDeviceCommand->WaitGPUCmdListFinish();
+        pGiBaker->m_pDeviceCommand->ResetCmdAlloc();
 
         std::shared_ptr<CGraphicsContext> pGraphicsContext = pGiBaker->m_pGraphicsContext;
         pGraphicsContext->BeginRenderPasss();
@@ -704,38 +739,14 @@ namespace gi
             for (uint32_t geoIndex = 0; geoIndex < atlas.m_atlasGeometries.size(); geoIndex++)
             {
                 SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
-                
-                {
-                    struct SGbufferGenCB
-                    {
-                        Matrix44 m_worldTM;
-                        Vec4 lightMapScaleAndBias;
 
-                        float padding[44];
-                    };
-                    SGbufferGenCB gBufferCbData;
-                    gBufferCbData.m_worldTM.SetIdentity();
-                    for (uint32_t i = 0; i < 4; i++)
-                    {
-                        for (uint32_t j = 0; j < 3; j++)
-                        {
-                            gBufferCbData.m_worldTM.m[i][j] = giMesh.m_meshInstanceInfo.m_transform[j][i];
-                        }
-                    }
-
-                    for (uint32_t i = 0; i < 44; i++)
-                    {
-                        gBufferCbData.padding[i] = 1.0;
-                    }
-                    gBufferCbData.lightMapScaleAndBias = giMesh.m_lightMapScaleAndBias;
-                    giMesh.m_hConstantBuffer = CreateBuffer(&gBufferCbData, sizeof(SGbufferGenCB), sizeof(SGbufferGenCB), EBufferUsage::USAGE_CB);
-                    pGraphicsContext->SetConstantBuffer(giMesh.m_hConstantBuffer,0);
-                }
                 std::vector<std::shared_ptr<CBuffer>> vertexBuffers;
                 vertexBuffers.push_back(giMesh.m_hPositionBuffer);
                 vertexBuffers.push_back(giMesh.m_hLightMapUVBuffer);
+
+                pGraphicsContext->SetConstantBuffer(giMesh.m_hConstantBuffer, 0);
                 pGraphicsContext->SetVertexBuffers(vertexBuffers);
-                pGraphicsContext->DrawInstanced(giMesh.vertexCount, 1, 0, 0);
+                pGraphicsContext->DrawInstanced(giMesh.m_nVertexCount, 1, 0, 0);
             }
         }
         pGraphicsContext->EndRenderPasss();
@@ -743,7 +754,15 @@ namespace gi
 
     void hwrtl::gi::PrePareLightMapRayTracingPass()
     {
-        pGiBaker->m_pTLAS = pGiBaker->m_pDeviceCommand->BuildAccelerationStructure();
+        std::vector<std::shared_ptr<SGpuBlasData>> inoutGpuBlasDataArray;
+        for (uint32_t index = 0; index < pGiBaker->m_giMeshes.size(); index++)
+        {
+            auto& giMesh = pGiBaker->m_giMeshes[index];
+            inoutGpuBlasDataArray.push_back(giMesh.m_pGpuMeshData);
+        }
+
+        pGiBaker->m_pDeviceCommand->BuildBottomLevelAccelerationStructure(inoutGpuBlasDataArray);
+        pGiBaker->m_pTLAS = pGiBaker->m_pDeviceCommand->BuildTopAccelerationStructure(inoutGpuBlasDataArray);
 
         //TODO
         ResetCommandList();
@@ -865,7 +884,7 @@ namespace gi
                 vertexBuffers.push_back(giMesh.m_hPositionBuffer);
                 vertexBuffers.push_back(giMesh.m_hLightMapUVBuffer);
                 pGraphicsContext->SetVertexBuffers(vertexBuffers);
-                pGraphicsContext->DrawInstanced(giMesh.vertexCount, 1, 0, 0);
+                pGraphicsContext->DrawInstanced(giMesh.m_nVertexCount, 1, 0, 0);
             }
         }
         pGraphicsContext->EndRenderPasss();

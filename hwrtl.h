@@ -372,22 +372,6 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		}
 	};
 
-	struct SMeshInstancesDesc
-	{
-		const Vec3* m_pPositionData = nullptr;
-		const void* m_pIndexData = nullptr; // optional
-
-		const Vec2* m_pUVData = nullptr; // optional
-		const Vec3* m_pNormalData = nullptr; // optional
-
-		uint32_t m_nIndexStride = 0;
-
-		uint32_t m_nVertexCount = 0;
-		uint32_t m_nIndexCount = 0;
-
-		std::vector<SMeshInstanceInfo>instanes;
-	};
-
 	struct SShader
 	{
 		ERayShaderType m_eShaderType;
@@ -445,10 +429,41 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		virtual ~CBuffer() {}
 	};
 
+	class CBottomLevelAccelerationStructure
+	{
+	public:
+		virtual ~CBottomLevelAccelerationStructure() {}
+	};
+
 	class CTopLevelAccelerationStructure
 	{
 	public:
 		virtual ~CTopLevelAccelerationStructure() {}
+	};
+
+	struct SCPUMeshData
+	{
+		const Vec3* m_pPositionData = nullptr;
+		const void* m_pIndexData = nullptr; // optional
+
+		const Vec2* m_pUVData = nullptr; // optional
+		const Vec3* m_pNormalData = nullptr; // optional
+
+		uint32_t m_nIndexStride = 0;
+
+		uint32_t m_nVertexCount = 0;
+		uint32_t m_nIndexCount = 0;
+
+		std::vector<SMeshInstanceInfo>instanes;
+	};
+
+	struct SGpuBlasData
+	{
+		uint32_t m_nVertexCount = 0;
+		std::vector<SMeshInstanceInfo>instanes;
+
+		std::shared_ptr<CBuffer>m_pVertexBuffer;
+		std::shared_ptr<CBottomLevelAccelerationStructure>m_pBLAS;
 	};
 
 	class CDeviceCommand
@@ -459,7 +474,8 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		virtual void WaitGPUCmdListFinish() = 0;
 		virtual void ResetCmdAlloc() = 0;
 
-		virtual std::shared_ptr<CTopLevelAccelerationStructure> BuildAccelerationStructure() = 0;
+		virtual void BuildBottomLevelAccelerationStructure(std::vector<std::shared_ptr<SGpuBlasData>>& inoutGPUMeshDataPtr) = 0;
+		virtual std::shared_ptr<CTopLevelAccelerationStructure> BuildTopAccelerationStructure(std::vector<std::shared_ptr<SGpuBlasData>>& gpuMeshData) = 0;
 	};
 
 	class CContext
@@ -528,7 +544,6 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	// Ray tracing commnad
 	std::shared_ptr<CRayTracingContext> CreateRayTracingContext();
 
-	EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc, std::shared_ptr<CBuffer> vertexBuffer);
 	std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources);
 
 

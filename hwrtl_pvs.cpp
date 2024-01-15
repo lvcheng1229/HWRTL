@@ -115,7 +115,7 @@ namespace pvs
 		//vertices[33] = Vec3(boundMin.x, boundMin.y, boundMin.z);
 		//vertices[34] = Vec3(boundMin.x, boundMax.y, boundMin.z);
 		//
-		//SMeshInstancesDesc meshInstancesDesc;
+		//SCPUMeshData meshInstancesDesc;
 		//meshInstancesDesc.instanes = meshInstanceInfo;
 		//meshInstancesDesc.m_pPositionData = vertices;
 		//meshInstancesDesc.m_nVertexCount = 12;

@@ -59,7 +59,7 @@ namespace gi
 
 	void InitGIBaker(SBakeConfig bakeConfig);
 	void AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc);
-	void AddBakeMeshs(const std::vector<SBakeMeshDesc>& bakeMeshDescs);
+	void AddBakeMeshsAndCreateVB(const std::vector<SBakeMeshDesc>& bakeMeshDescs);
 
 	void PrePareLightMapGBufferPass();
 	void ExecuteLightMapGBufferPass();
