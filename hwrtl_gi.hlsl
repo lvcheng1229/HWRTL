@@ -86,7 +86,7 @@ struct SRayTracingLight
 
 RaytracingAccelerationStructure rtScene : register(t0);
 Texture2D<float4> rtWorldPosition : register(t1);
-StructuredBuffer<SRayTracingLight> rtSceneLights : register(t2);
+//StructuredBuffer<SRayTracingLight> rtSceneLights : register(t2);
 
 RWTexture2D<float4> rtOutput : register(u0);
 
@@ -132,7 +132,7 @@ void LightMapRayTracingRayGen()
 	);
 
     rtOutput[rayIndex] = float4(payload.RetColor, 0.0);
-    rtOutput[rayIndex].y += rtSceneLights[0].color.x;
+    //rtOutput[rayIndex].y += rtSceneLights[0].color.x;
 
 }
 

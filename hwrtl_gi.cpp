@@ -389,9 +389,9 @@ namespace gi
 {
 	struct SGIMesh
 	{
-		SResourceHandle m_hPositionBuffer;
-		SResourceHandle m_hLightMapUVBuffer;
-		SResourceHandle m_hConstantBuffer;
+		std::shared_ptr<CBuffer> m_hPositionBuffer;
+		std::shared_ptr<CBuffer> m_hLightMapUVBuffer;
+		std::shared_ptr<CBuffer> m_hConstantBuffer;
         
         Vec2i m_nLightMapSize;
         Vec2i m_nAtlasOffset;
@@ -423,7 +423,7 @@ namespace gi
         Vec2i m_nAtlasSize;
         uint32_t m_nAtlasNum;
 
-        SResourceHandle m_hRtSceneLight;
+        std::shared_ptr<CBuffer> m_hRtSceneLight;
 
         std::shared_ptr <CDeviceCommand> m_pDeviceCommand;
 
@@ -433,7 +433,8 @@ namespace gi
 
         std::shared_ptr<CTopLevelAccelerationStructure> m_pTLAS;
 
-        std::shared_ptr<CRayTracingContext> m_pLightMapRayTracingContext;
+        std::shared_ptr<CRayTracingContext> m_pRayTracingContext;
+        std::shared_ptr<CGraphicsContext>m_pGraphicsContext;
 	};
 
 	static CGIBaker* pGiBaker = nullptr;
@@ -445,6 +446,8 @@ namespace gi
         pGiBaker->m_bakeConfig = bakeConfig;
 
         pGiBaker->m_pDeviceCommand = CreateDeviceCommand();
+        pGiBaker->m_pRayTracingContext = CreateRayTracingContext();
+        pGiBaker->m_pGraphicsContext = CreateGraphicsContext();
 	}
 
 	void hwrtl::gi::AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc)
@@ -667,6 +670,9 @@ namespace gi
 
 	void hwrtl::gi::PrePareLightMapGBufferPass()
 	{
+        //pGiBaker->m_pDeviceCommand->ResetCmdAlloc();
+        //pGiBaker->m_pDeviceCommand->OpenCmdList();
+
         PrePareGBufferPassPSO();
         PackMeshIntoAtlas();
         GenerateAtlas();
@@ -674,6 +680,13 @@ namespace gi
 
 	void hwrtl::gi::ExecuteLightMapGBufferPass()
 	{
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
+
+        std::shared_ptr<CGraphicsContext> pGraphicsContext = pGiBaker->m_pGraphicsContext;
+        pGraphicsContext->BeginRenderPasss();
+        pGraphicsContext->SetGraphicsPipelineState(pGiBaker->m_pLightMapGBufferPSO);
         for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
         {
             SAtlas& atlas = pGiBaker->m_atlas[index];
@@ -685,19 +698,13 @@ namespace gi
             renderTargets.push_back(posTex);
             renderTargets.push_back(normTex);
 
-            SubmitCommandlist();
-            WaitForPreviousFrame();
-            ResetCmdList();
-
-            BeginRasterization(pGiBaker->m_pLightMapGBufferPSO);
-            SetRenderTargets(renderTargets, -1, true, true);
-            SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
+            pGraphicsContext->SetRenderTargets(renderTargets, nullptr, true, true);
+            pGraphicsContext->SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
             for (uint32_t geoIndex = 0; geoIndex < atlas.m_atlasGeometries.size(); geoIndex++)
             {
                 SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
-                SResourceHandle vbHandles[2] = { giMesh.m_hPositionBuffer,giMesh.m_hLightMapUVBuffer };
-
+                
                 {
                     struct SGbufferGenCB
                     {
@@ -722,18 +729,16 @@ namespace gi
                     }
                     gBufferCbData.lightMapScaleAndBias = giMesh.m_lightMapScaleAndBias;
                     giMesh.m_hConstantBuffer = CreateBuffer(&gBufferCbData, sizeof(SGbufferGenCB), sizeof(SGbufferGenCB), EBufferUsage::USAGE_CB);
-                    SetConstantBuffer(giMesh.m_hConstantBuffer,0);
+                    pGraphicsContext->SetConstantBuffer(giMesh.m_hConstantBuffer,0);
                 }
-
-                SetVertexBuffers(vbHandles, 2);
-                DrawInstanced(giMesh.vertexCount, 1, 0, 0);
-                
+                std::vector<std::shared_ptr<CBuffer>> vertexBuffers;
+                vertexBuffers.push_back(giMesh.m_hPositionBuffer);
+                vertexBuffers.push_back(giMesh.m_hLightMapUVBuffer);
+                pGraphicsContext->SetVertexBuffers(vertexBuffers);
+                pGraphicsContext->DrawInstanced(giMesh.vertexCount, 1, 0, 0);
             }
         }
-
-        SubmitCommandlist();
-        WaitForPreviousFrame();
-        ResetCmdList();
+        pGraphicsContext->EndRenderPasss();
 	}
 
     void hwrtl::gi::PrePareLightMapRayTracingPass()
@@ -760,14 +765,14 @@ namespace gi
         std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_gi.cpp");
         std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
 
-        pGiBaker->m_pRayTracingPSO = CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 3,1,0,0 });
+        pGiBaker->m_pRayTracingPSO = CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 2,1,0,0 });
 
-        pGiBaker->m_pLightMapRayTracingContext = CreateRayTracingContext();
+        
     }
 
     void hwrtl::gi::ExecuteLightMapRayTracingPass()
     {
-        std::shared_ptr<CRayTracingContext> pLightMapRayTracingContext = pGiBaker->m_pLightMapRayTracingContext;
+        std::shared_ptr<CRayTracingContext> pLightMapRayTracingContext = pGiBaker->m_pRayTracingContext;
        
         pLightMapRayTracingContext->BeginRayTacingPasss();
         pLightMapRayTracingContext->SetRayTracingPipelineState(pGiBaker->m_pRayTracingPSO);
@@ -776,18 +781,14 @@ namespace gi
         {
             SAtlas& atlas = pGiBaker->m_atlas[index];
 
-            
             pLightMapRayTracingContext->SetShaderUAV(atlas.m_resultTexture, 0);
-            
             pLightMapRayTracingContext->SetTLAS(pGiBaker->m_pTLAS,0);
             pLightMapRayTracingContext->SetShaderSRV(atlas.m_hPosTexture, 1);
             //SetShaderResource(pGiBaker->m_hRtSceneLight, ESlotType::ST_T, 2);
             pLightMapRayTracingContext->DispatchRayTracicing(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
-            //SubmitCommandlist();
-            //WaitForPreviousFrame();
-            //ResetCmdList();
         }
+        pLightMapRayTracingContext->EndRayTacingPasss();
     }
 
     void hwrtl::gi::PrePareVisualizeResultPass()
@@ -816,8 +817,8 @@ namespace gi
         Vec2i visualTex(1024,1024);
         STextureCreateDesc texCreateDesc{ ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA32_FLOAT,visualTex.x,visualTex.y };
         STextureCreateDesc dsCreateDesc{ ETexUsage::USAGE_DSV,ETexFormat::FT_DepthStencil,visualTex.x,visualTex.y };
-        std::shared_ptr<CTexture2D> resouceHandle = CreateTexture2D(texCreateDesc);
-        SResourceHandle dsHandle = CreateDepthStencil(dsCreateDesc);
+        std::shared_ptr<CTexture2D> renderTarget = CreateTexture2D(texCreateDesc);
+        std::shared_ptr<CTexture2D> dsTarget = CreateTexture2D(dsCreateDesc);
 
         Vec3 eyePosition = Vec3(0, -12, 6);
         Vec3 eyeDirection = Vec3(0, 1, 0); // focus - eyePos
@@ -833,34 +834,41 @@ namespace gi
         float fovAngleY = 90;
         float aspectRatio = float(visualTex.y) / float(visualTex.x);
         viewCB.vpMat = GetViewProjectionMatrixRightHand(eyePosition, eyeDirection, upDirection, fovAngleY, aspectRatio, 0.1, 100.0).GetTrasnpose();
+        
+        //temporary code
+        ResetCommandList();
+        std::shared_ptr<CBuffer> hViewCB = CreateBuffer(&viewCB, sizeof(SViewCB), sizeof(SViewCB), EBufferUsage::USAGE_CB);
+        SubmitCommandlist();
+        WaitForPreviousFrame();
+        ResetCmdList();
 
-        BeginRasterization(pGiBaker->m_pVisualizeGIPSO);
+        std::shared_ptr<CGraphicsContext> pGraphicsContext = pGiBaker->m_pGraphicsContext;
+
+        pGraphicsContext->BeginRenderPasss();
+        pGraphicsContext->SetGraphicsPipelineState(pGiBaker->m_pVisualizeGIPSO);
 
         std::vector<std::shared_ptr<CTexture2D>>renderTargets;
-        renderTargets.push_back(resouceHandle);
-        SetRenderTargets(renderTargets, dsHandle, true, true);
-        SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
-
-        SResourceHandle hViewCB = CreateBuffer(&viewCB, sizeof(SViewCB), sizeof(SViewCB), EBufferUsage::USAGE_CB);
-        SetConstantBuffer(hViewCB, 1);
+        renderTargets.push_back(renderTarget);
+        pGraphicsContext->SetRenderTargets(renderTargets, dsTarget);
+        pGraphicsContext->SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
+        pGraphicsContext->SetConstantBuffer(hViewCB,1);
 
         for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
         {
             SAtlas& atlas = pGiBaker->m_atlas[index];
+            pGraphicsContext->SetShaderSRV(atlas.m_resultTexture, 0);
             for (uint32_t geoIndex = 0; geoIndex < atlas.m_atlasGeometries.size(); geoIndex++)
             {
                 SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
-                SetConstantBuffer(giMesh.m_hConstantBuffer,0);
-                SetTexture(atlas.m_resultTexture,0); // TODO:set once
-                SResourceHandle vbHandles[2] = { giMesh.m_hPositionBuffer,giMesh.m_hLightMapUVBuffer };
-                SetVertexBuffers(vbHandles, 2);
-                DrawInstanced(giMesh.vertexCount, 1, 0, 0);
+                pGraphicsContext->SetConstantBuffer(giMesh.m_hConstantBuffer, 0);
+                std::vector<std::shared_ptr<CBuffer>>vertexBuffers;
+                vertexBuffers.push_back(giMesh.m_hPositionBuffer);
+                vertexBuffers.push_back(giMesh.m_hLightMapUVBuffer);
+                pGraphicsContext->SetVertexBuffers(vertexBuffers);
+                pGraphicsContext->DrawInstanced(giMesh.vertexCount, 1, 0, 0);
             }
         }
-
-        SubmitCommandlist();
-        WaitForPreviousFrame();
-        ResetCmdList();
+        pGraphicsContext->EndRenderPasss();
     }
 
 	void hwrtl::gi::DeleteGIBaker()

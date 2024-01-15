@@ -276,11 +276,31 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     bakeMeshDescs.push_back(backPlane);
 }
 
+void ExamplerDestroyScene()
+{
+    boxGeoPositions.~vector();
+    boxGeoLightMapUV.~vector();
+
+    bottomPlaneGeoPositions.~vector();
+    bottomPlaneGeoLightMapUV.~vector();
+
+    topPlaneGeoPositions.~vector();
+    topPlaneGeoLightMapUV.~vector();
+
+    leftPlaneGeoPositions.~vector();
+    leftPlaneGeoLightMapUV.~vector();
+
+    rightPlaneGeoPositions.~vector();
+    rightPlaneGeoLightMapUV.~vector();
+
+    backPlaneGeoPositions.~vector();
+    backPlaneGeoLightMapUV.~vector();
+}
 
 int main()
 {
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
-    //_CrtSetBreakAlloc(463);
+    //_CrtSetBreakAlloc(194);
     {
         std::vector<SBakeMeshDesc> sceneMesh;
         CreateAndAddScene(sceneMesh);
@@ -296,6 +316,7 @@ int main()
         PrePareVisualizeResultPass();
         ExecuteVisualizeResultPass();
         DeleteGIBaker();
+        ExamplerDestroyScene();
     }
     _CrtDumpMemoryLeaks();
     return 0;

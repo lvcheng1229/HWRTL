@@ -51,78 +51,79 @@ namespace pvs
 
 	EAddMeshInstancesResult AddOccluderBounds(const SOccluderBound& occluderBound, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices)
 	{
-		const Vec3 boundMin = occluderBound.m_min;
-		const Vec3 boundMax = occluderBound.m_max;
-		Vec3 vertices[12 * 3];
-
-		//top triangle 1
-		vertices[0] = Vec3(boundMax.x, boundMax.y, boundMax.z);
-		vertices[1] = Vec3(boundMax.x, boundMin.y, boundMax.z);
-		vertices[2] = Vec3(boundMin.x, boundMax.y, boundMax.z);
-
-		//top triangle 2
-		vertices[3] = Vec3(boundMin.x, boundMax.y, boundMax.z); 
-		vertices[4] = Vec3(boundMax.x, boundMin.y, boundMax.z);
-		vertices[5] = Vec3(boundMin.x, boundMin.y, boundMax.z);
-
-		//front triangle 1
-		vertices[6] = Vec3(boundMin.x, boundMin.y, boundMax.z);
-		vertices[7] = Vec3(boundMax.x, boundMin.y, boundMax.z);
-		vertices[8] = Vec3(boundMax.x, boundMin.y, boundMin.z);
-
-		//front triangle 2
-		vertices[9] = Vec3(boundMin.x, boundMin.y, boundMax.z);
-		vertices[10] = Vec3(boundMax.x, boundMin.y, boundMin.z);
-		vertices[11] = Vec3(boundMin.x, boundMin.y, boundMin.z);
-
-		//back triangle 1
-		vertices[12] = Vec3(boundMax.x, boundMax.y, boundMax.z);
-		vertices[13] = Vec3(boundMin.x, boundMax.y, boundMax.z);
-		vertices[14] = Vec3(boundMin.x, boundMax.y, boundMin.z);
-
-		//back triangle 2
-		vertices[15] = Vec3(boundMax.x, boundMax.y, boundMax.z);
-		vertices[16] = Vec3(boundMin.x, boundMax.y, boundMin.z);
-		vertices[17] = Vec3(boundMax.x, boundMax.y, boundMin.z);
-
-		//bottom triangle 1
-		vertices[18] = Vec3(boundMax.x, boundMin.y, boundMin.z);
-		vertices[19] = Vec3(boundMin.x, boundMin.y, boundMin.z);
-		vertices[20] = Vec3(boundMax.x, boundMax.y, boundMin.z);
-
-		//bottom triangle 2
-		vertices[21] = Vec3(boundMax.x, boundMax.y, boundMin.z);
-		vertices[22] = Vec3(boundMin.x, boundMin.y, boundMin.z);
-		vertices[23] = Vec3(boundMin.x, boundMax.y, boundMin.z);
-
-		//right triangle 1
-		vertices[24] = Vec3(boundMax.x, boundMin.y, boundMax.z);
-		vertices[25] = Vec3(boundMax.x, boundMax.y, boundMax.z);
-		vertices[26] = Vec3(boundMax.x, boundMax.y, boundMin.z);
-
-		//right triangle 2
-		vertices[27] = Vec3(boundMax.x, boundMin.y, boundMax.z);
-		vertices[28] = Vec3(boundMax.x, boundMax.y, boundMin.z);
-		vertices[29] = Vec3(boundMax.x, boundMin.y, boundMin.z);
-
-		//left triangle 1
-		vertices[30] = Vec3(boundMin.x, boundMax.y, boundMax.z);
-		vertices[31] = Vec3(boundMin.x, boundMin.y, boundMax.z);
-		vertices[32] = Vec3(boundMin.x, boundMin.y, boundMin.z);
-
-		//left triangle 2
-		vertices[32] = Vec3(boundMin.x, boundMax.y, boundMax.z);
-		vertices[33] = Vec3(boundMin.x, boundMin.y, boundMin.z);
-		vertices[34] = Vec3(boundMin.x, boundMax.y, boundMin.z);
-
-		SMeshInstancesDesc meshInstancesDesc;
-		meshInstancesDesc.instanes = meshInstanceInfo;
-		meshInstancesDesc.m_pPositionData = vertices;
-		meshInstancesDesc.m_nVertexCount = 12;
-		
-		SResourceHandle handle = CreateBuffer(meshInstancesDesc.m_pPositionData, meshInstancesDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
-
-		return AddRayTracingMeshInstances(meshInstancesDesc, handle);
+		//const Vec3 boundMin = occluderBound.m_min;
+		//const Vec3 boundMax = occluderBound.m_max;
+		//Vec3 vertices[12 * 3];
+		//
+		////top triangle 1
+		//vertices[0] = Vec3(boundMax.x, boundMax.y, boundMax.z);
+		//vertices[1] = Vec3(boundMax.x, boundMin.y, boundMax.z);
+		//vertices[2] = Vec3(boundMin.x, boundMax.y, boundMax.z);
+		//
+		////top triangle 2
+		//vertices[3] = Vec3(boundMin.x, boundMax.y, boundMax.z); 
+		//vertices[4] = Vec3(boundMax.x, boundMin.y, boundMax.z);
+		//vertices[5] = Vec3(boundMin.x, boundMin.y, boundMax.z);
+		//
+		////front triangle 1
+		//vertices[6] = Vec3(boundMin.x, boundMin.y, boundMax.z);
+		//vertices[7] = Vec3(boundMax.x, boundMin.y, boundMax.z);
+		//vertices[8] = Vec3(boundMax.x, boundMin.y, boundMin.z);
+		//
+		////front triangle 2
+		//vertices[9] = Vec3(boundMin.x, boundMin.y, boundMax.z);
+		//vertices[10] = Vec3(boundMax.x, boundMin.y, boundMin.z);
+		//vertices[11] = Vec3(boundMin.x, boundMin.y, boundMin.z);
+		//
+		////back triangle 1
+		//vertices[12] = Vec3(boundMax.x, boundMax.y, boundMax.z);
+		//vertices[13] = Vec3(boundMin.x, boundMax.y, boundMax.z);
+		//vertices[14] = Vec3(boundMin.x, boundMax.y, boundMin.z);
+		//
+		////back triangle 2
+		//vertices[15] = Vec3(boundMax.x, boundMax.y, boundMax.z);
+		//vertices[16] = Vec3(boundMin.x, boundMax.y, boundMin.z);
+		//vertices[17] = Vec3(boundMax.x, boundMax.y, boundMin.z);
+		//
+		////bottom triangle 1
+		//vertices[18] = Vec3(boundMax.x, boundMin.y, boundMin.z);
+		//vertices[19] = Vec3(boundMin.x, boundMin.y, boundMin.z);
+		//vertices[20] = Vec3(boundMax.x, boundMax.y, boundMin.z);
+		//
+		////bottom triangle 2
+		//vertices[21] = Vec3(boundMax.x, boundMax.y, boundMin.z);
+		//vertices[22] = Vec3(boundMin.x, boundMin.y, boundMin.z);
+		//vertices[23] = Vec3(boundMin.x, boundMax.y, boundMin.z);
+		//
+		////right triangle 1
+		//vertices[24] = Vec3(boundMax.x, boundMin.y, boundMax.z);
+		//vertices[25] = Vec3(boundMax.x, boundMax.y, boundMax.z);
+		//vertices[26] = Vec3(boundMax.x, boundMax.y, boundMin.z);
+		//
+		////right triangle 2
+		//vertices[27] = Vec3(boundMax.x, boundMin.y, boundMax.z);
+		//vertices[28] = Vec3(boundMax.x, boundMax.y, boundMin.z);
+		//vertices[29] = Vec3(boundMax.x, boundMin.y, boundMin.z);
+		//
+		////left triangle 1
+		//vertices[30] = Vec3(boundMin.x, boundMax.y, boundMax.z);
+		//vertices[31] = Vec3(boundMin.x, boundMin.y, boundMax.z);
+		//vertices[32] = Vec3(boundMin.x, boundMin.y, boundMin.z);
+		//
+		////left triangle 2
+		//vertices[32] = Vec3(boundMin.x, boundMax.y, boundMax.z);
+		//vertices[33] = Vec3(boundMin.x, boundMin.y, boundMin.z);
+		//vertices[34] = Vec3(boundMin.x, boundMax.y, boundMin.z);
+		//
+		//SMeshInstancesDesc meshInstancesDesc;
+		//meshInstancesDesc.instanes = meshInstanceInfo;
+		//meshInstancesDesc.m_pPositionData = vertices;
+		//meshInstancesDesc.m_nVertexCount = 12;
+		//
+		//SResourceHandle handle = CreateBuffer(meshInstancesDesc.m_pPositionData, meshInstancesDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
+		//
+		//return AddRayTracingMeshInstances(meshInstancesDesc, handle);
+		return EAddMeshInstancesResult::INVALID_INDEX_COUNT;
 	}
 
 	void AddPlayerCell(SPVSCell pvsCell)

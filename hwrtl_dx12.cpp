@@ -248,10 +248,45 @@ namespace hwrtl
         case ETexFormat::FT_RGBA32_FLOAT:
             return DXGI_FORMAT_R32G32B32A32_FLOAT;
             break;
+        case ETexFormat::FT_DepthStencil:
+            return DXGI_FORMAT_D24_UNORM_S8_UINT;
+            break;
         }
         ThrowIfFailed(-1);
         return DXGI_FORMAT_UNKNOWN;
     }
+
+    static DXGI_FORMAT Dx12ConvertToVertexFormat(EVertexFormat vertexFormat)
+    {
+        switch (vertexFormat)
+        {
+        case EVertexFormat::FT_FLOAT3:
+            return DXGI_FORMAT_R32G32B32_FLOAT;
+            break;
+        case EVertexFormat::FT_FLOAT2:
+            return DXGI_FORMAT_R32G32_FLOAT;
+            break;
+        }
+        ThrowIfFailed(-1);
+        return DXGI_FORMAT_UNKNOWN;
+    }
+
+    static uint32_t Dx12TextureFormatSize(ETexFormat eTexFormat)
+    {
+        switch (eTexFormat)
+        {
+        case ETexFormat::FT_RGBA8_UNORM:
+            return 4;
+            break;
+        case ETexFormat::FT_RGBA32_FLOAT:
+            return 16;
+            break;
+        }
+        ThrowIfFailed(-1);
+        return 0;
+    }
+
+
 
     struct SDx12MeshInstanceInfo
     {
@@ -566,9 +601,14 @@ namespace hwrtl
         ID3D12RootSignaturePtr m_pRsGlobalRootSig;
         ID3D12PipelineStatePtr m_pRSPipelinState;
 
-        CDxGraphicsPipelineState(ID3D12RootSignaturePtr rsGlobalRootSig, ID3D12PipelineStatePtr rsPipelinState)
-            :m_pRsGlobalRootSig(rsGlobalRootSig)
-            , m_pRSPipelinState(rsPipelinState) {}
+        uint32_t m_slotDescNum[4];
+
+        CDxGraphicsPipelineState()
+        {
+            m_pRsGlobalRootSig = nullptr;
+            m_pRSPipelinState = nullptr;
+            m_slotDescNum[0] = m_slotDescNum[1] = m_slotDescNum[2] = m_slotDescNum[3] = 0;
+        }
     };
 
     class CDxRayTracingPipelineState : public CRayTracingPipelineState
@@ -622,25 +662,25 @@ namespace hwrtl
 
     struct SGraphicsContext
     {
-        CDxPassHandleManager m_dxPassHandleManager;
-        CDXPassDescManager m_dxPassDescManager;
+        //CDxPassHandleManager m_dxPassHandleManager;
+        //CDXPassDescManager m_dxPassDescManager;
     };
 
     class CDXRasterization
     {
     public:
-        SGraphicsContext m_graphicsContext;
+        //SGraphicsContext m_graphicsContext;
 
-        std::vector<D3D12_VERTEX_BUFFER_VIEW>m_vbViews;
+        //std::vector<D3D12_VERTEX_BUFFER_VIEW>m_vbViews;
+        //
+        //D3D12_CPU_DESCRIPTOR_HANDLE m_renderTargetHandles[8];
+        //D3D12_CPU_DESCRIPTOR_HANDLE m_depthStencilHandle;
+        //
+        //uint32_t m_nRenderTargetNum = 0;
+        //bool bUseDepthStencil = false;
 
-        D3D12_CPU_DESCRIPTOR_HANDLE m_renderTargetHandles[8];
-        D3D12_CPU_DESCRIPTOR_HANDLE m_depthStencilHandle;
-
-        uint32_t m_nRenderTargetNum = 0;
-        bool bUseDepthStencil = false;
-
-        D3D12_VIEWPORT m_viewPort;
-        D3D12_RECT m_scissorRect;
+        //D3D12_VIEWPORT m_viewPort;
+        //D3D12_RECT m_scissorRect;
     };
 
     class CDXRayTracing
@@ -686,8 +726,6 @@ namespace hwrtl
         pDXDevice->m_csuDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, false);
         pDXDevice->m_dsvDescManager.Init(pDXDevice->m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, false);
         
-        pDXRasterization->m_graphicsContext.m_dxPassDescManager.Init(pDXDevice->m_pDevice);
-
         ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pDXDevice->m_pCmdAllocator)));
         ThrowIfFailed(pDXDevice->m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pDXDevice->m_pCmdAllocator, nullptr, IID_PPV_ARGS(&pDXDevice->m_pCmdList)));
 
@@ -730,12 +768,12 @@ namespace hwrtl
 
         UpdateSubresources<1>(pCmdList, defaultBuffer, pUploadBuffer, 0, 0, 1, &subResourceData);
 
-        CD3DX12_RESOURCE_BARRIER resourceBarrierAfter = CD3DX12_RESOURCE_BARRIER::Transition(defaultBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_GENERIC_READ);
+        CD3DX12_RESOURCE_BARRIER resourceBarrierAfter = CD3DX12_RESOURCE_BARRIER::Transition(defaultBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
         pCmdList->ResourceBarrier(1, &resourceBarrierAfter);
         return defaultBuffer;
     }
 
-    ID3D12ResourcePtr DXCreateBuffer(uint64_t size, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES initState, const D3D12_HEAP_PROPERTIES& heapProps)
+    ID3D12ResourcePtr Dx12CreateBuffer(uint64_t size, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES initState, const D3D12_HEAP_PROPERTIES& heapProps)
     {
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
 
@@ -756,11 +794,6 @@ namespace hwrtl
         ThrowIfFailed(pDevice->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc, initState, nullptr, IID_PPV_ARGS(&pBuffer)));
         return pBuffer;
     }
-
-    /***************************************************************************
-    * Texture Create And Manage Functions
-    * 1. Create Texture2D
-    ***************************************************************************/
 
     struct CDx12Resouce
     {
@@ -791,7 +824,22 @@ namespace hwrtl
         CDx12View m_dsv;
     };
 
+    class CDxBuffer : public CBuffer
+    {
+    public:
+        ~CDxBuffer()
+        {
+            // Release Desc In Desc Manager
+        }
 
+        CDx12Resouce m_dxResource;
+
+        CDx12View m_uav;
+        CDx12View m_srv;
+        CDx12View m_cbv;
+
+        D3D12_VERTEX_BUFFER_VIEW m_vbv;
+    };
 
     std::shared_ptr<CTexture2D> hwrtl::CreateTexture2D(STextureCreateDesc texCreateDesc)
     {
@@ -849,10 +897,110 @@ namespace hwrtl
             retDxTexture2D->m_rtv = CDx12View{ cpuHandle ,gpuHandle ,rtvIndex };
         }
 
+        if (uint32_t(texCreateDesc.m_eTexUsage & ETexUsage::USAGE_UAV))
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+            uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+            uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+            uavDesc.Texture2D.MipSlice = 0;
+            uavDesc.Texture2D.PlaneSlice = 0;
+
+            CDx12DescManager& csuDescManager = pDXDevice->m_csuDescManager;
+            uint32_t uavIndex = csuDescManager.AllocDesc();
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = csuDescManager.GetCPUHandle(uavIndex);
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = csuDescManager.GetGPUHandle(uavIndex);
+            pDevice->CreateUnorderedAccessView(pDxResouce->m_pResource, nullptr, &uavDesc, cpuHandle);
+
+            retDxTexture2D->m_uav = CDx12View{ cpuHandle ,gpuHandle ,uavIndex };
+        }
+
+        if (uint32_t(texCreateDesc.m_eTexUsage & ETexUsage::USAGE_DSV))
+        {
+            D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
+            dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
+            dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+            dsvDesc.Format = Dx12ConvertTextureFormat(texCreateDesc.m_eTexFormat);
+            dsvDesc.Texture2D.MipSlice = 0;
+
+            CDx12DescManager& dsvDescManager = pDXDevice->m_dsvDescManager;
+            uint32_t dsvIndex = dsvDescManager.AllocDesc();
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = dsvDescManager.GetCPUHandle(dsvIndex);
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = dsvDescManager.GetGPUHandle(dsvIndex);
+            pDevice->CreateDepthStencilView(pDxResouce->m_pResource, &dsvDesc, cpuHandle);
+
+            retDxTexture2D->m_dsv = CDx12View{ cpuHandle ,gpuHandle ,dsvIndex };
+        }
+
         return retDxTexture2D;
     }
 
-    EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc,SResourceHandle vbResouce)
+    std::shared_ptr<CBuffer> CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage)
+    {
+        assert(pInitData != nullptr);
+
+        auto dxBuffer = std::make_shared<CDxBuffer>();
+        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+
+        dxBuffer->m_dxResource.m_pResource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
+
+        if (bufferUsage == EBufferUsage::USAGE_VB)
+        {
+            D3D12_VERTEX_BUFFER_VIEW vbView = {};
+            vbView.BufferLocation = dxBuffer->m_dxResource.m_pResource->GetGPUVirtualAddress();
+            vbView.SizeInBytes = nByteSize;
+            vbView.StrideInBytes = nStride;
+            dxBuffer->m_vbv = vbView;
+        }
+
+        if (bufferUsage == EBufferUsage::USAGE_IB)
+        {
+            assert(false);
+        }
+
+        if (bufferUsage == EBufferUsage::USAGE_CB)
+        {
+            D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+            cbvDesc.BufferLocation = dxBuffer->m_dxResource.m_pResource->GetGPUVirtualAddress();
+            cbvDesc.SizeInBytes = nByteSize;
+
+            CDx12DescManager& csuDescManager = pDXDevice->m_csuDescManager;
+            uint32_t cbvIndex = csuDescManager.AllocDesc();
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = csuDescManager.GetCPUHandle(cbvIndex);
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = csuDescManager.GetGPUHandle(cbvIndex);
+
+            pDevice->CreateConstantBufferView(&cbvDesc, cpuHandle);
+
+            dxBuffer->m_dxResource.m_resourceState = D3D12_RESOURCE_STATE_COMMON;
+            dxBuffer->m_cbv = CDx12View{ cpuHandle ,gpuHandle ,cbvIndex };
+        }
+
+        if (bufferUsage == EBufferUsage::USAGE_Structure)
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
+            srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Buffer.FirstElement = 0;
+            srvDesc.Buffer.NumElements = nByteSize / nStride;
+            srvDesc.Buffer.StructureByteStride = nStride;
+            srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+
+            CDx12DescManager& csuDescManager = pDXDevice->m_csuDescManager;
+            uint32_t srvIndex = csuDescManager.AllocDesc();
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = csuDescManager.GetCPUHandle(srvIndex);
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = csuDescManager.GetGPUHandle(srvIndex);
+
+            pDevice->CreateShaderResourceView(dxBuffer->m_dxResource.m_pResource, &srvDesc, cpuHandle);
+
+            dxBuffer->m_dxResource.m_resourceState = D3D12_RESOURCE_STATE_COMMON;
+            dxBuffer->m_srv = CDx12View{ cpuHandle ,gpuHandle ,srvIndex };
+
+        }
+
+        return dxBuffer;
+    }
+
+    EAddMeshInstancesResult AddRayTracingMeshInstances(const SMeshInstancesDesc& meshInstancesDesc, std::shared_ptr<CBuffer> vertexBuffer)
     {
         const uint32_t nVertexCount = meshInstancesDesc.m_nVertexCount;
         const uint32_t nIndexCount = meshInstancesDesc.m_nIndexCount;
@@ -885,9 +1033,9 @@ namespace hwrtl
         dxMeshInstanceInfo.instanes = meshInstancesDesc.instanes;
 
         // create vertex buffer
-        auto& vbBuffer = pDXDevice->m_resouManager.GetResource(vbResouce);
-
-        dxMeshInstanceInfo.m_pPositionBuffer = vbBuffer;
+        CDxBuffer* dxVertexBuffer = static_cast<CDxBuffer*>(vertexBuffer.get());
+        dxMeshInstanceInfo.m_pPositionBuffer = dxVertexBuffer->m_dxResource.m_pResource;
+        
         pDXRayTracing->m_dxMeshInstanceInfos.emplace_back(dxMeshInstanceInfo);
 
         return EAddMeshInstancesResult::SUCESS;
@@ -930,8 +1078,8 @@ namespace hwrtl
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info;
             pDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
 
-            ID3D12ResourcePtr pScratch = DXCreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
-            ID3D12ResourcePtr pResult = DXCreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
+            ID3D12ResourcePtr pScratch = Dx12CreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
+            ID3D12ResourcePtr pResult = Dx12CreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
 
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC asDesc = {};
             asDesc.Inputs = inputs;
@@ -986,8 +1134,8 @@ namespace hwrtl
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info;
         pDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
 
-        ID3D12ResourcePtr pScratch = DXCreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
-        ID3D12ResourcePtr pResult = DXCreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
+        ID3D12ResourcePtr pScratch = Dx12CreateBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, defaultHeapProperies);
+        ID3D12ResourcePtr pResult = Dx12CreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, defaultHeapProperies);
 
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
         instanceDescs.resize(totalInstanceNum);
@@ -1036,15 +1184,6 @@ namespace hwrtl
 
         return resultBuffers;
     }
-
-    //void hwrtl::BuildAccelerationStructure()
-    //{
-    //    ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
-    //    
-    //    BuildBottomLevelAccelerationStructure();
-    //    SDx12AccelerationStructureBuffers topLevelBuffers = BuildTopLevelAccelerationStructure();
-    //    pDXRayTracing->m_ptlas = topLevelBuffers.pResult;
-    //}
 
     IDxcBlobPtr Dx12CompileRayTracingLibraryDXC(const std::wstring& shaderPath, LPCWSTR pEntryPoint, LPCWSTR pTargetProfile)
     {
@@ -1439,140 +1578,6 @@ namespace hwrtl
         return pDxRayTracingPipelineState;
     }
 
-
-
-    bool ValidateResource()
-    {
-        return true;
-    }
-
-    
-
-    SResourceHandle hwrtl::CreateDepthStencil(STextureCreateDesc dsCreateDesc)
-    {
-        ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
-        CDXResouceManager& resManager = pDXDevice->m_resouManager;
-
-        D3D12_RESOURCE_DESC depthStencilDesc;
-        depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        depthStencilDesc.Alignment = 0;
-        depthStencilDesc.Width = dsCreateDesc.m_width;
-        depthStencilDesc.Height = dsCreateDesc.m_height;
-        depthStencilDesc.DepthOrArraySize = 1;
-        depthStencilDesc.MipLevels = 1;
-        depthStencilDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-        depthStencilDesc.SampleDesc.Count = 1;
-        depthStencilDesc.SampleDesc.Quality = 0;
-        depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        depthStencilDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-        D3D12_CLEAR_VALUE optClear;
-        optClear.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-        optClear.DepthStencil.Depth = 0.0f;
-        optClear.DepthStencil.Stencil = 0;
-
-        D3D12_RESOURCE_STATES InitialResourceState = D3D12_RESOURCE_STATE_COMMON;
-        uint32_t allocIndex;
-        ThrowIfFailed(pDevice->CreateCommittedResource(&defaultHeapProperies, D3D12_HEAP_FLAG_NONE, &depthStencilDesc, InitialResourceState, &optClear, IID_PPV_ARGS(&resManager.AllocResource(allocIndex))));
-        resManager.SetResouceCurrentState(allocIndex, InitialResourceState);
-
-        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
-        dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
-        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-        dsvDesc.Format = depthStencilDesc.Format;
-        dsvDesc.Texture2D.MipSlice = 0;
-
-        uint32_t dsvIndex = pDXDevice->m_dsvDescManager.AllocDesc();
-        pDevice->CreateDepthStencilView(resManager.GetResource(allocIndex), &dsvDesc, pDXDevice->m_dsvDescManager.GetCPUHandle(dsvIndex));
-        resManager.SetDsvIndex(allocIndex, dsvIndex);
-
-        return SResourceHandle(allocIndex);
-    }
-
-    SResourceHandle hwrtl::CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage)
-    {
-        uint32_t allocIndex = 0;
-        ID3D12ResourcePtr& resource = pDXDevice->m_resouManager.AllocResource(allocIndex);
-        CDXResouceManager& resManager = pDXDevice->m_resouManager;
-        CDx12DescManager& csuDescManager = pDXDevice->m_csuDescManager;
-        auto pDevice = pDXDevice->m_pDevice;
-
-        if (bufferUsage == EBufferUsage::USAGE_VB || bufferUsage == EBufferUsage::USAGE_IB)
-        {
-            resource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
-
-            D3D12_VERTEX_BUFFER_VIEW vbView = {};
-            vbView.BufferLocation = resource->GetGPUVirtualAddress();
-            vbView.SizeInBytes = nByteSize;
-            vbView.StrideInBytes = nStride;
-
-            pDXDevice->m_resouManager.SetVertexBufferView(allocIndex, vbView);
-        }
-        else if (bufferUsage == EBufferUsage::USAGE_CB)
-        {
-            //temporary code
-            if (pInitData != nullptr)
-            {
-                resource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
-
-            }
-            else
-            {
-                resource = DXCreateBuffer(nByteSize, D3D12_RESOURCE_FLAGS::D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, uploadHeapProperies);
-            }
-            
-
-            uint32_t cbvIndex = csuDescManager.AllocDesc();
-
-            D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-            cbvDesc.BufferLocation = resource->GetGPUVirtualAddress();
-            cbvDesc.SizeInBytes = nByteSize;
-            pDevice->CreateConstantBufferView(&cbvDesc, csuDescManager.GetCPUHandle(cbvIndex));
-            resManager.SetCSUIndex(allocIndex, cbvIndex);
-
-            //if (pInitData != nullptr)
-            //{
-            //    void* cbvDataPtr;
-            //    D3D12_RANGE readRange{ 0, 0 };
-            //    ThrowIfFailed(resource->Map(0, &readRange, reinterpret_cast<void**>(&cbvDataPtr)));
-            //    memcpy(cbvDataPtr, &pInitData, sizeof(nByteSize));
-            //    //resource->Unmap(0, &readRange);
-            //}
-        }
-        else if (bufferUsage == EBufferUsage::USAGE_Structure)
-        {
-            resource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
-
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
-            srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.Buffer.FirstElement = 0;
-            srvDesc.Buffer.NumElements = nByteSize / nStride;
-            srvDesc.Buffer.StructureByteStride = nStride;
-            srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
-
-            resManager.SetResouceCurrentState(allocIndex, D3D12_RESOURCE_STATE_GENERIC_READ);
-
-            uint32_t srvIndex = csuDescManager.AllocDesc();
-            pDevice->CreateShaderResourceView(resManager.GetResource(allocIndex), &srvDesc, csuDescManager.GetCPUHandle(srvIndex));
-            pDXDevice->m_resouManager.SetCSUIndex(allocIndex, srvIndex);
-            resManager.SetCSUIndex(allocIndex, srvIndex);
-        }
-        
-        return allocIndex;
-    }
-
-    void hwrtl::UpdateConstantBuffer(SResourceHandle resourceHandle, uint64_t nByteSize, const void* pData)
-    {
-        ID3D12ResourcePtr& resource = pDXDevice->m_resouManager.GetResource(resourceHandle);
-        void* cbvDataPtr;
-        D3D12_RANGE readRange{ 0, 0 };
-        ThrowIfFailed(resource->Map(0, &readRange, reinterpret_cast<void**>(&cbvDataPtr)));
-        memcpy(cbvDataPtr, &pData, sizeof(nByteSize));
-        resource->Unmap(0, nullptr);
-    }
-
     void hwrtl::ResetCommandList()
     {
         ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
@@ -1590,94 +1595,6 @@ namespace hwrtl
         pCmdQueue->ExecuteCommandLists(1, &pGraphicsList);
 
         pDXDevice->m_resouceBarriers.clear();
-    }
-
-    //void hwrtl::SetTLAS(uint32_t bindIndex)
-    //{
-    //    ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
-    //    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    //    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
-    //    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    //    srvDesc.RaytracingAccelerationStructure.Location = pDXRayTracing->m_ptlas->GetGPUVirtualAddress();
-    //    pDevice->CreateShaderResourceView(nullptr, &srvDesc, pDXRayTracing->m_rtDescManager.GetCPUHandle(bindIndex + pDXRayTracing->m_rangeIndex[uint32_t(ESlotType::ST_T)]));
-    //    ValidateResource();
-    //}
-
-    //void hwrtl::BeginRayTracing()
-    //{
-    //    ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
-    //    ID3D12CommandAllocatorPtr pCmdAlloc = pDXDevice->m_pCmdAllocator;
-    //    ThrowIfFailed(pCmdList->Reset(pCmdAlloc, nullptr));
-    //
-    //    ID3D12DescriptorHeap* heaps[] = { pDXRayTracing->m_rtDescManager.GetHeap()};
-    //    pDXDevice->m_pCmdList->SetDescriptorHeaps(1, heaps);
-    //}
-
-    //void hwrtl::DispatchRayTracicing(std::shared_ptr<CRayTracingPipelineState>rtPipelineState, uint32_t width, uint32_t height)
-    //{
-    //    ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
-    //    ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
-    //
-    //    CDxRayTracingPipelineState* dxRtPipelineState = static_cast<CDxRayTracingPipelineState*>(rtPipelineState.get());
-    //
-    //    D3D12_DISPATCH_RAYS_DESC raytraceDesc = {};
-    //    raytraceDesc.Width = width;
-    //    raytraceDesc.Height = height;
-    //    raytraceDesc.Depth = 1;
-    //
-    //    // RayGen is the first entry in the shader-table
-    //    raytraceDesc.RayGenerationShaderRecord.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + 0 * ShaderTableEntrySize;
-    //    raytraceDesc.RayGenerationShaderRecord.SizeInBytes = ShaderTableEntrySize;
-    //
-    //    uint32_t offset = 1 * ShaderTableEntrySize;;
-    //    
-    //    uint32_t rMissShaderNum = dxRtPipelineState->m_nShaderNum[uint32_t(ERayShaderType::RAY_MIH)];
-    //    if (rMissShaderNum > 0)
-    //    {
-    //        raytraceDesc.MissShaderTable.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + offset;
-    //        raytraceDesc.MissShaderTable.StrideInBytes = ShaderTableEntrySize;
-    //        raytraceDesc.MissShaderTable.SizeInBytes = ShaderTableEntrySize * rMissShaderNum;   // Only a s single miss-entry
-    //
-    //        offset += rMissShaderNum * ShaderTableEntrySize;
-    //    }
-    //
-    //    uint32_t rHitShaderNum = dxRtPipelineState->m_nShaderNum[uint32_t(ERayShaderType::RAY_AHS)] + dxRtPipelineState->m_nShaderNum[uint32_t(ERayShaderType::RAY_CHS)];
-    //
-    //    if (rHitShaderNum > 0)
-    //    {
-    //        raytraceDesc.HitGroupTable.StartAddress = pDXRayTracing->m_pShaderTable->GetGPUVirtualAddress() + offset;
-    //        raytraceDesc.HitGroupTable.StrideInBytes = ShaderTableEntrySize;
-    //        raytraceDesc.HitGroupTable.SizeInBytes = ShaderTableEntrySize * rHitShaderNum; //todo: multipie number
-    //    }
-    //
-    //    pCmdList->SetComputeRootSignature(dxRtPipelineState->m_pGlobalRootSig);
-    //    //pCmdList->SetComputeRootDescriptorTable(0, pDXRayTracing->m_rtDescManager.GetGPUHandle(0));
-    //
-    //    if (pDXDevice->m_resouceBarriers.size() > 0)
-    //    {
-    //        pCmdList->ResourceBarrier(pDXDevice->m_resouceBarriers.size(), pDXDevice->m_resouceBarriers.data());
-    //    }
-    //
-    //    pCmdList->SetPipelineState1(pDXRayTracing->m_pRtPipelineState);
-    //    pCmdList->DispatchRays(&raytraceDesc);
-    //
-    //    // submit command and reset commnad list
-    //
-    //}
-
-    static DXGI_FORMAT ConvertToDXVertexFormat(EVertexFormat vertexFormat)
-    {
-        switch (vertexFormat)
-        {
-        case EVertexFormat::FT_FLOAT3:
-            return DXGI_FORMAT_R32G32B32_FLOAT;
-            break;
-        case EVertexFormat::FT_FLOAT2:
-            return DXGI_FORMAT_R32G32_FLOAT;
-            break;
-        }
-        ThrowIfFailed(-1);
-        return DXGI_FORMAT_UNKNOWN;
     }
 
     static D3D12_STATIC_SAMPLER_DESC MakeStaticSampler(D3D12_FILTER filter, D3D12_TEXTURE_ADDRESS_MODE wrapMode, uint32_t registerIndex, uint32_t space)
@@ -1713,49 +1630,64 @@ namespace hwrtl
 
     std::shared_ptr<CGraphicsPipelineState> hwrtl::CreateRSPipelineState(const std::wstring shaderPath, std::vector<SShader> rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat)
     {
+        auto dxGaphicsPipelineState = std::make_shared<CDxGraphicsPipelineState>();
         auto pDevice = pDXDevice->m_pDevice;
-        ID3D12RootSignaturePtr pRsGlobalRootSig;
-        ID3D12PipelineStatePtr pRSPipelinState;
+
+        for (uint32_t index = 0; index < 4; index++)
+        {
+            dxGaphicsPipelineState->m_slotDescNum[index] = rasterizationResources[index];
+        }
 
         // create root signature
         {
-            uint32_t noEmptySignatureNum = 0;
+            std::vector<D3D12_ROOT_PARAMETER> rootParams;
+            std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
 
-            D3D12_DESCRIPTOR_RANGE descRanges[4];
-            for (uint32_t index = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; index <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; index++)
+            uint32_t totalRootNum = 0;
+            for (uint32_t descRangeIndex = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; descRangeIndex <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; descRangeIndex++)
             {
-                uint32_t numDesc = rasterizationResources[index];
-                if (numDesc > 0)
+                uint32_t rangeNum = rasterizationResources[descRangeIndex];
+                if (rangeNum > 0)
                 {
-                    descRanges[noEmptySignatureNum].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(index);
-                    descRanges[noEmptySignatureNum].NumDescriptors = rasterizationResources[index];
-                    descRanges[noEmptySignatureNum].BaseShaderRegister = 0;
-                    descRanges[noEmptySignatureNum].RegisterSpace = 0;
-                    descRanges[noEmptySignatureNum].OffsetInDescriptorsFromTableStart = noEmptySignatureNum;
-                    noEmptySignatureNum++;
+                    totalRootNum++;
                 }
             }
 
-            D3D12_ROOT_DESCRIPTOR_TABLE rootDescTable;
-            rootDescTable.NumDescriptorRanges = noEmptySignatureNum;
-            rootDescTable.pDescriptorRanges = descRanges;
+            rootParams.resize(totalRootNum);
+            descRanges.resize(totalRootNum);
 
-            D3D12_ROOT_PARAMETER rootParameter;
-            rootParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-            rootParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-            rootParameter.DescriptorTable = rootDescTable;
+            uint32_t rootTabbleIndex = 0;
+
+            for (uint32_t descRangeIndex = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; descRangeIndex <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; descRangeIndex++)
+            {
+                uint32_t rangeNum = rasterizationResources[descRangeIndex];
+                if (rangeNum > 0)
+                {
+                    D3D12_DESCRIPTOR_RANGE descRange;
+                    descRange.BaseShaderRegister = 0;
+                    descRange.NumDescriptors = rangeNum;
+                    descRange.RegisterSpace = 0;
+                    descRange.OffsetInDescriptorsFromTableStart = 0;
+                    descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(descRangeIndex);
+                    descRanges[rootTabbleIndex] = descRange;
+
+                    rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+                    rootParams[rootTabbleIndex].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+                    rootParams[rootTabbleIndex].DescriptorTable.NumDescriptorRanges = 1;
+                    rootParams[rootTabbleIndex].DescriptorTable.pDescriptorRanges = &descRanges[rootTabbleIndex];
+
+                    rootTabbleIndex++;
+                }
+            }
 
             D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
-            rootSigDesc.NumParameters = 1;
-            rootSigDesc.pParameters = &rootParameter;
+            rootSigDesc.NumParameters = rootParams.size();
+            rootSigDesc.pParameters = rootParams.data();
             rootSigDesc.NumStaticSamplers = 6;
             rootSigDesc.pStaticSamplers = gStaticSamplerDescs;
             rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
-            ID3DBlobPtr signature;
-            ID3DBlobPtr error;
-            ThrowIfFailed(D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error));
-            ThrowIfFailed(pDevice->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&pRsGlobalRootSig)));
+            dxGaphicsPipelineState->m_pRsGlobalRootSig = CreateRootSignature(pDevice, rootSigDesc);
         }
 
         // create pipeline state
@@ -1780,7 +1712,7 @@ namespace hwrtl
             std::vector<D3D12_INPUT_ELEMENT_DESC>inputElementDescs;
             for (uint32_t index = 0; index < vertexLayouts.size(); index++)
             {
-                inputElementDescs.push_back(D3D12_INPUT_ELEMENT_DESC{ "TEXCOORD" ,index,ConvertToDXVertexFormat(vertexLayouts[index]),index,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA ,0 });
+                inputElementDescs.push_back(D3D12_INPUT_ELEMENT_DESC{ "TEXCOORD" ,index,Dx12ConvertToVertexFormat(vertexLayouts[index]),index,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA ,0 });
             }
 
             D3D12_RASTERIZER_DESC rasterizerDesc = {};
@@ -1815,7 +1747,7 @@ namespace hwrtl
                 
             D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
             psoDesc.InputLayout = { inputElementDescs.data(), static_cast<UINT>(inputElementDescs.size())};
-            psoDesc.pRootSignature = pRsGlobalRootSig;
+            psoDesc.pRootSignature = dxGaphicsPipelineState->m_pRsGlobalRootSig;
             psoDesc.VS.pShaderBytecode = shaders[0]->GetBufferPointer();
             psoDesc.VS.BytecodeLength = shaders[0]->GetBufferSize();
             psoDesc.PS.pShaderBytecode = shaders[1]->GetBufferPointer();
@@ -1843,9 +1775,9 @@ namespace hwrtl
                 psoDesc.RTVFormats[index] = Dx12ConvertTextureFormat(rtFormats[index]);
             }
             psoDesc.SampleDesc.Count = 1;
-            ThrowIfFailed(pDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pRSPipelinState)));
+            ThrowIfFailed(pDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&dxGaphicsPipelineState->m_pRSPipelinState)));
         }
-        return std::make_shared<CDxGraphicsPipelineState>(pRsGlobalRootSig, pRSPipelinState);
+        return dxGaphicsPipelineState;
     }
 
     void hwrtl::WaitForPreviousFrame()
@@ -1870,183 +1802,6 @@ namespace hwrtl
         // command lists have finished execution on the GPU; apps should use 
         // fences to determine GPU execution progress.
         ThrowIfFailed(pCmdAllocator->Reset());
-    }
-
-    void hwrtl::BeginRasterization(std::shared_ptr<CGraphicsPipelineState> graphicsPipelineStata)
-    {
-        CDxGraphicsPipelineState* dxGraphicsPipelineStata = static_cast<CDxGraphicsPipelineState*>(graphicsPipelineStata.get());
-        auto pCmdAllocator = pDXDevice->m_pCmdAllocator;
-        auto pCommandList = pDXDevice->m_pCmdList;
-        
-        // However, when ExecuteCommandList() is called on a particular command 
-        // list, that command list can then be reset at any time and must be before 
-        // re-recording.
-        ThrowIfFailed(pCommandList->Reset(pCmdAllocator, dxGraphicsPipelineStata->m_pRSPipelinState));
-
-        ID3D12DescriptorHeap* ppHeaps[] = { pDXRasterization->m_graphicsContext.m_dxPassDescManager.GetHeapPtr() };
-        pCommandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
-        pCommandList->SetGraphicsRootSignature(dxGraphicsPipelineStata->m_pRsGlobalRootSig);
-    }
-
-    void hwrtl::SetTexture(std::shared_ptr<CTexture2D>tex2D, uint32_t offset)
-    {
-        CDxTexture2D* dxTex2D = static_cast<CDxTexture2D*>(tex2D.get());
-        auto pCommandList = pDXDevice->m_pCmdList;
-        auto handle = dxTex2D->m_srv.m_pCpuDescHandle;;
-        pDXRasterization->m_graphicsContext.m_dxPassHandleManager.SetCPUHandle(offset, handle, ESlotType::ST_T);
-
-
-        //see SetShaderResource
-
-        //TODO
-        //TransitionResource
-        //CopyDescriptors
-        //SetComputeRootDescriptorTable
-    }
-
-    void hwrtl::SetConstantBuffer(SResourceHandle cbHandle, uint32_t offset)
-    {
-        auto pCommandList = pDXDevice->m_pCmdList;
-
-        uint32_t cbvIndex = pDXDevice->m_resouManager.GetCSUIndex(cbHandle);        
-        auto handle = pDXDevice->m_csuDescManager.GetCPUHandle(cbvIndex);
-
-        pDXRasterization->m_graphicsContext.m_dxPassHandleManager.SetCPUHandle(offset, handle, ESlotType::ST_B);
-    }
-
-    void hwrtl::SetRenderTargets(std::vector<std::shared_ptr<CTexture2D>> renderTargets, SResourceHandle depthStencil, bool bClearRT, bool bClearDs)
-    {
-        CDXResouceManager& resouManager = pDXDevice->m_resouManager;
-        for (uint32_t index = 0; index < renderTargets.size(); index++)
-        {
-            CDxTexture2D* dxTexture2D = static_cast<CDxTexture2D*>(renderTargets[index].get());
-
-            pDXRasterization->m_renderTargetHandles[index] = dxTexture2D->m_rtv.m_pCpuDescHandle;
-
-            D3D12_RESOURCE_BARRIER barrier = {};
-            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-            barrier.Transition.pResource = dxTexture2D->m_dxResource.m_pResource;
-            barrier.Transition.StateBefore = dxTexture2D->m_dxResource.m_resourceState;
-            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-            dxTexture2D->m_dxResource.m_resourceState = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            pDXDevice->m_resouceBarriers.push_back(barrier);
-        }
-        pDXRasterization->m_nRenderTargetNum = renderTargets.size();
-
-        if (depthStencil >= 0)
-        {
-            uint32_t dsvIndex = resouManager.GetDsvIndex(depthStencil);
-            pDXRasterization->m_depthStencilHandle = pDXDevice->m_dsvDescManager.GetCPUHandle(dsvIndex);
-
-            D3D12_RESOURCE_BARRIER barrier = {};
-            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-            barrier.Transition.pResource = resouManager.GetResource(depthStencil);
-            barrier.Transition.StateBefore = resouManager.GetResouceCurrentState(depthStencil);
-            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-            pDXDevice->m_resouManager.SetResouceCurrentState(depthStencil, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            pDXDevice->m_resouceBarriers.push_back(barrier);
-            pDXRasterization->bUseDepthStencil = true;
-        }
-        
-
-        auto pCommandList = pDXDevice->m_pCmdList;
-        if (pDXDevice->m_resouceBarriers.size() > 0)
-        {
-            pCommandList->ResourceBarrier(pDXDevice->m_resouceBarriers.size(), pDXDevice->m_resouceBarriers.data());
-        }
-    }
-
-    void hwrtl::SetViewport(float width, float height)
-    {
-        pDXRasterization->m_viewPort = { 0,0,width ,height ,0,1 };
-        pDXRasterization->m_scissorRect = { 0,0,static_cast<LONG>(width) ,static_cast<LONG>(height) };
-    }
-
-    void hwrtl::SetVertexBuffers(SResourceHandle* vertexBuffer, uint32_t slotNum)
-    {
-        pDXRasterization->m_vbViews.resize(slotNum);
-        for (uint32_t index = 0; index < slotNum; index++)
-        {
-            D3D12_VERTEX_BUFFER_VIEW vbView = pDXDevice->m_resouManager.GetVertexBufferView(vertexBuffer[index]);
-            pDXRasterization->m_vbViews[index] = vbView;
-        }
-    }
-
-    static void ApplyCBVSRV()
-    {
-        auto pCommandList = pDXDevice->m_pCmdList;
-        //TODO:
-        //temporary code
-        {
-            auto& passHandleManager = pDXRasterization->m_graphicsContext.m_dxPassHandleManager;
-            auto& passDescManager = pDXRasterization->m_graphicsContext.m_dxPassDescManager;
-
-            uint32_t numSRVUsed = passHandleManager.GetSlotNum(ESlotType::ST_T);
-            uint32_t numCBVUsed = passHandleManager.GetSlotNum(ESlotType::ST_B);
-            
-            uint32_t totalUsed = numSRVUsed + numCBVUsed;
-            uint32_t startIndex = passDescManager.GetAndAddCurrentPassSlotStart(totalUsed);
-
-            if (numSRVUsed > 0)
-            {
-                D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[16];
-                for (uint32_t index = 0; index < numSRVUsed; index++)
-                {
-                    srcHandles[index] = passHandleManager.GetCPUHandle(index, ESlotType::ST_T);
-                }
-
-                D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle = passDescManager.GetCPUHandle(startIndex);
-                pDXDevice->m_pDevice->CopyDescriptors(1, &cpuDescHandle, &numSRVUsed, numSRVUsed, srcHandles, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-            }
-
-            if (numCBVUsed > 0)
-            {
-                D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[16];
-                for (uint32_t index = 0; index < numCBVUsed; index++)
-                {
-                    srcHandles[index] = passHandleManager.GetCPUHandle(index, ESlotType::ST_B);
-                }
-                D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle = passDescManager.GetCPUHandle(startIndex + numSRVUsed);
-                pDXDevice->m_pDevice->CopyDescriptors(1, &cpuDescHandle, &numCBVUsed, numCBVUsed, srcHandles, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-            }
-
-            {
-
-                D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle = passDescManager.GetGPUHandle(startIndex);
-                pCommandList->SetGraphicsRootDescriptorTable(0/*TODO*/, gpuDescHandle);
-            }
-        }
-    }
-
-    void hwrtl::DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation)
-    {
-        auto pCommandList = pDXDevice->m_pCmdList;
-        
-        ApplyCBVSRV();
-
-        pCommandList->RSSetViewports(1, &pDXRasterization->m_viewPort);
-        pCommandList->RSSetScissorRects(1, &pDXRasterization->m_scissorRect);
-
-        if (pDXRasterization->bUseDepthStencil)
-        {
-            pCommandList->OMSetRenderTargets(pDXRasterization->m_nRenderTargetNum, pDXRasterization->m_renderTargetHandles, FALSE, &pDXRasterization->m_depthStencilHandle);
-        }
-        else
-        {
-            pCommandList->OMSetRenderTargets(pDXRasterization->m_nRenderTargetNum, pDXRasterization->m_renderTargetHandles, FALSE, nullptr);
-        }
-
-        //const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
-        //pCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-        pCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        pCommandList->IASetVertexBuffers(0, pDXRasterization->m_vbViews.size(), pDXRasterization->m_vbViews.data());
-        pCommandList->DrawInstanced(vertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
     }
 
     void hwrtl::DestroyScene()
@@ -2078,6 +1833,44 @@ namespace hwrtl
     class CDxDeviceCommand : public CDeviceCommand
     {
     public:
+        virtual void OpenCmdList()
+        {
+            auto pCommandList = pDXDevice->m_pCmdList;
+            auto pCmdAllocator = pDXDevice->m_pCmdAllocator;
+            ThrowIfFailed(pCommandList->Reset(pCmdAllocator, nullptr));
+        }
+
+        virtual void CloseAndExecuteCmdList()
+        {
+            ID3D12GraphicsCommandList4Ptr pCmdList = pDXDevice->m_pCmdList;
+            ID3D12CommandQueuePtr pCmdQueue = pDXDevice->m_pCmdQueue;
+            ID3D12CommandList* pGraphicsList = pCmdList.GetInterfacePtr();
+
+            pCmdList->Close();
+            pCmdQueue->ExecuteCommandLists(1, &pGraphicsList);
+
+            pDXDevice->m_resouceBarriers.clear();
+        }
+
+        virtual void WaitGPUCmdListFinish()
+        {
+            const UINT64 nFenceValue = pDXDevice->m_nFenceValue;
+            ThrowIfFailed(pDXDevice->m_pCmdQueue->Signal(pDXDevice->m_pFence, nFenceValue));
+            pDXDevice->m_nFenceValue++;
+
+            if (pDXDevice->m_pFence->GetCompletedValue() < nFenceValue)
+            {
+                ThrowIfFailed(pDXDevice->m_pFence->SetEventOnCompletion(nFenceValue, pDXDevice->m_FenceEvent));
+                WaitForSingleObject(pDXDevice->m_FenceEvent, INFINITE);
+            }
+        }
+
+        virtual void ResetCmdAlloc()
+        {
+            auto pCmdAllocator = pDXDevice->m_pCmdAllocator;
+            ThrowIfFailed(pCmdAllocator->Reset());
+        }
+
         virtual std::shared_ptr<CTopLevelAccelerationStructure> BuildAccelerationStructure()override
         {
             auto dxTLAS = std::make_shared<CDxTopLevelAccelerationStructure>();
@@ -2113,10 +1906,25 @@ namespace hwrtl
         return std::make_shared<CDxDeviceCommand>();
     }
 
+    static constexpr int nHandlePerView = 32;
+
     /***************************************************************************
     * RayTracing Context
     * 1. Create Ray Tracing Context
     ***************************************************************************/
+
+    void CheckBinding(D3D12_CPU_DESCRIPTOR_HANDLE* handles)
+    {
+#if ENABLE_DX12_DEBUG_LAYER
+        for (uint32_t index = 0; index < nHandlePerView - 1; index++)
+        {
+            if (handles[index + 1].ptr != 0 && handles[index].ptr == 0)
+            {
+                assert(false && "shader binding must be continuous in hwrtl. for example: shader binding layout <t0, t1, t3> will cause error, you should bind resource like <t0, t1, t2>");
+            }
+        }
+#endif
+    }
 
     class CDx12RayTracingContext : public CRayTracingContext
     {
@@ -2125,6 +1933,7 @@ namespace hwrtl
         {
             ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
             m_rtPassDescManager.Init(pDevice);
+            memset(m_viewHandles, 0, 4 * nHandlePerView * sizeof(D3D12_CPU_DESCRIPTOR_HANDLE));
         }
 
         virtual ~CDx12RayTracingContext() 
@@ -2134,14 +1943,21 @@ namespace hwrtl
 
         virtual void BeginRayTacingPasss()override
         {
-            m_bViewTableDirty[0] = m_bViewTableDirty[1] = m_bViewTableDirty[2] = m_bViewTableDirty[3] = false;
-            
+            auto pCmdAlloc = pDXDevice->m_pCmdAllocator;
+            auto pCommandList = pDXDevice->m_pCmdList;
+            ThrowIfFailed(pCommandList->Reset(pCmdAlloc, nullptr));
+
             ID3D12DescriptorHeap* heaps[] = { m_rtPassDescManager.GetHeapPtr() };
-            pDXDevice->m_pCmdList->SetDescriptorHeaps(1, heaps);
+            pCommandList->SetDescriptorHeaps(1, heaps);
+
+            ResetContext();
         }
 
         virtual void EndRayTacingPasss()override
         {
+            SubmitCommandlist();
+            WaitForPreviousFrame();
+            ResetCmdList();
             m_rtPassDescManager.ResetPassSlotStartIndex();
         }
 
@@ -2150,6 +1966,8 @@ namespace hwrtl
             CDxRayTracingPipelineState* dxRayTracingPSO = static_cast<CDxRayTracingPipelineState*>(rtPipelineState.get());
             m_pGlobalRootSig = dxRayTracingPSO->m_pGlobalRootSig;
             m_pRtPipelineState = dxRayTracingPSO->m_pRtPipelineState;
+            m_pShaderTable = dxRayTracingPSO->m_pShaderTable;
+
             for (uint32_t index = 0; index < 4; index++)
             {
                 m_nShaderNum[index] = dxRayTracingPSO->m_nShaderNum[index];
@@ -2159,8 +1977,10 @@ namespace hwrtl
             m_viewSlotIndex[0] = 0;
             for (uint32_t index = 1; index < 4; index++)
             {
-                m_viewSlotIndex[index] = m_viewSlotIndex[index - 1] + m_slotDescNum[index - 1];
+                m_viewSlotIndex[index] = m_viewSlotIndex[index - 1] + (m_slotDescNum[index - 1] > 0 ? 1 : 0);
             }
+
+            m_bPipelineStateDirty = true;
         }
 
         virtual void SetTLAS(std::shared_ptr<CTopLevelAccelerationStructure> tlas,uint32_t bindIndex)override
@@ -2218,30 +2038,36 @@ namespace hwrtl
         {
             auto pCommandList = pDXDevice->m_pCmdList;
 
+            ApplyPipelineStata();
+
             for (uint32_t index = 0; index < 4; index++)
             {
                 ApplySlotViews(ESlotType(index));
             }
 
-            pCommandList->SetComputeRootSignature(m_pGlobalRootSig);
-
             if (pDXDevice->m_resouceBarriers.size() > 0)
             {
                 pCommandList->ResourceBarrier(pDXDevice->m_resouceBarriers.size(), pDXDevice->m_resouceBarriers.data());
+                pDXDevice->m_resouceBarriers.clear();
             }
 
             D3D12_DISPATCH_RAYS_DESC rayDispatchDesc = CreateRayTracingDesc(width, height);
-            pCommandList->SetPipelineState1(m_pRtPipelineState);
+            
             pCommandList->DispatchRays(&rayDispatchDesc);
-
-            SubmitCommandlist();
-            //WaitForPreviousFrame();
-            //ResetCmdList
-            ID3D12CommandAllocatorPtr pCmdAlloc = pDXDevice->m_pCmdAllocator;
-            ThrowIfFailed(pCommandList->Reset(pCmdAlloc, nullptr));
         }
 
     private:
+        void ApplyPipelineStata()
+        {
+            if (m_bPipelineStateDirty)
+            {
+                auto pCommandList = pDXDevice->m_pCmdList;
+                pCommandList->SetPipelineState1(m_pRtPipelineState);
+                pCommandList->SetComputeRootSignature(m_pGlobalRootSig);
+                m_bPipelineStateDirty = false;
+            }
+        }
+
         void ApplySlotViews(ESlotType slotType)
         {
             uint32_t slotIndex = uint32_t(slotType);
@@ -2250,31 +2076,16 @@ namespace hwrtl
                 CheckBinding(m_viewHandles[slotIndex]);
                 auto pCommandList = pDXDevice->m_pCmdList;
 
-                // copy desc
                 uint32_t numCopy = m_slotDescNum[slotIndex];
                 uint32_t startIndex = m_rtPassDescManager.GetAndAddCurrentPassSlotStart(numCopy);
                 D3D12_CPU_DESCRIPTOR_HANDLE destCPUHandle = m_rtPassDescManager.GetCPUHandle(startIndex);
                 pDXDevice->m_pDevice->CopyDescriptors(1, &destCPUHandle, &numCopy, numCopy, m_viewHandles[slotIndex], nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
                 
-                // set desc table
                 D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle = m_rtPassDescManager.GetGPUHandle(startIndex);
                 pCommandList->SetComputeRootDescriptorTable(m_viewSlotIndex[slotIndex], gpuDescHandle);
 
                 m_bViewTableDirty[slotIndex] = false;
             }
-        }
-
-        void CheckBinding(D3D12_CPU_DESCRIPTOR_HANDLE* handles)
-        {
-#if ENABLE_DX12_DEBUG_LAYER
-            for (uint32_t index = 0; index < nHandlePerView - 1; index++)
-            {
-                if (handles[index + 1].ptr != 0 && handles[index].ptr == 0)
-                {
-                    assert(false && "shader binding must be continuous in hwrtl. for example: shader binding layout <t0, t1, t3> will cause error, you should bind resource like <t0, t1, t2>");
-                }
-            }
-#endif
         }
 
         D3D12_DISPATCH_RAYS_DESC CreateRayTracingDesc(uint32_t width, uint32_t height)
@@ -2308,21 +2119,26 @@ namespace hwrtl
             }
             return raytraceDesc;
         }
+
+        void ResetContext()
+        {
+            m_bViewTableDirty[0] = m_bViewTableDirty[1] = m_bViewTableDirty[2] = m_bViewTableDirty[3] = false;
+            m_bPipelineStateDirty = false;
+        }
+
     private:
         CDXPassDescManager m_rtPassDescManager;
 
-        static constexpr int nHandlePerView = 32;
-
         D3D12_CPU_DESCRIPTOR_HANDLE m_viewHandles[4][nHandlePerView];
         bool m_bViewTableDirty[4];
+        bool m_bPipelineStateDirty;
 
-        // CDxRayTracingPipelineState
         ID3D12RootSignaturePtr m_pGlobalRootSig;
         ID3D12StateObjectPtr m_pRtPipelineState;
         ID3D12ResourcePtr m_pShaderTable;
+
         uint32_t m_nShaderNum[4];
         uint32_t m_slotDescNum[4];
-
         uint32_t m_viewSlotIndex[4];
     };
 
@@ -2331,9 +2147,292 @@ namespace hwrtl
         return std::make_shared<CDx12RayTracingContext>();
     }
 
+    class CDxGraphicsContext : public CGraphicsContext
+    {
+    public:
 
+        CDxGraphicsContext()
+        {
+            ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
+            m_rsPassDescManager.Init(pDevice);
+            memset(m_viewHandles, 0, 4 * nHandlePerView * sizeof(D3D12_CPU_DESCRIPTOR_HANDLE));
+        }
 
+        virtual void BeginRenderPasss()override
+        {
+            auto pCmdAlloc = pDXDevice->m_pCmdAllocator;
+            auto pCommandList = pDXDevice->m_pCmdList;
+            ThrowIfFailed(pCommandList->Reset(pCmdAlloc, nullptr));
 
+            ID3D12DescriptorHeap* heaps[] = { m_rsPassDescManager.GetHeapPtr() };
+            pCommandList->SetDescriptorHeaps(1, heaps);
+
+            ResetContext();
+        }
+
+        virtual void EndRenderPasss()override
+        {
+            SubmitCommandlist();
+            WaitForPreviousFrame();
+            ResetCmdList();
+            m_rsPassDescManager.ResetPassSlotStartIndex();
+        }
+
+        virtual void SetGraphicsPipelineState(std::shared_ptr<CGraphicsPipelineState>rtPipelineState)override
+        {
+            CDxGraphicsPipelineState* dxGraphicsPipelineState = static_cast<CDxGraphicsPipelineState*>(rtPipelineState.get());
+            m_pRsGlobalRootSig = dxGraphicsPipelineState->m_pRsGlobalRootSig;
+            m_pRSPipelinState = dxGraphicsPipelineState->m_pRSPipelinState;
+            for (uint32_t index = 0; index < 4; index++)
+            {
+                m_slotDescNum[index] = dxGraphicsPipelineState->m_slotDescNum[index];
+            }
+
+            m_viewSlotIndex[0] = 0;
+            for (uint32_t index = 1; index < 4; index++)
+            {
+                m_viewSlotIndex[index] = m_viewSlotIndex[index - 1] + m_slotDescNum[index - 1];
+            }
+
+            m_bPipelineStateDirty = true;
+        }
+
+        virtual void SetViewport(float width, float height)
+        {
+            m_viewPort = { 0,0,width ,height ,0,1 };
+            m_scissorRect = { 0,0,static_cast<LONG>(width) ,static_cast<LONG>(height) };
+            m_bViewportDirty = true;
+        }
+
+        virtual void SetRenderTargets(std::vector<std::shared_ptr<CTexture2D>> renderTargets, std::shared_ptr<CTexture2D> depthStencil = nullptr, bool bClearRT = true, bool bClearDs = true) override
+        {
+            for (uint32_t index = 0; index < renderTargets.size(); index++)
+            {
+                CDxTexture2D* dxTexture2D = static_cast<CDxTexture2D*>(renderTargets[index].get());
+
+                m_hRenderTargets[index] = dxTexture2D->m_rtv.m_pCpuDescHandle;
+
+                D3D12_RESOURCE_BARRIER barrier = {};
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+                barrier.Transition.pResource = dxTexture2D->m_dxResource.m_pResource;
+                barrier.Transition.StateBefore = dxTexture2D->m_dxResource.m_resourceState;
+                barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                
+                dxTexture2D->m_dxResource.m_resourceState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                
+                if (barrier.Transition.StateBefore != barrier.Transition.StateAfter)
+                {
+                    pDXDevice->m_resouceBarriers.push_back(barrier);
+                }
+            }
+            m_nRenderTargetNum = renderTargets.size();
+            m_bRenderTargetDirty = true;
+
+            if (depthStencil != nullptr)
+            {
+                CDxTexture2D* dxDsTexture = static_cast<CDxTexture2D*>(depthStencil.get());
+
+                m_hDepthStencil = dxDsTexture->m_dsv.m_pCpuDescHandle;
+
+                D3D12_RESOURCE_BARRIER barrier = {};
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+                barrier.Transition.pResource = dxDsTexture->m_dxResource.m_pResource;
+                barrier.Transition.StateBefore = dxDsTexture->m_dxResource.m_resourceState;
+                barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+                dxDsTexture->m_dxResource.m_resourceState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+                if (barrier.Transition.StateBefore != barrier.Transition.StateAfter)
+                {
+                    pDXDevice->m_resouceBarriers.push_back(barrier);
+                }
+                m_bDepthStencil = true;
+            }
+        }
+        virtual void SetShaderSRV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex) override
+        {
+            CDxTexture2D* pDxTex2D = static_cast<CDxTexture2D*>(tex2D.get());
+            m_viewHandles[uint32_t(ESlotType::ST_T)][bindIndex] = pDxTex2D->m_srv.m_pCpuDescHandle;
+            m_bViewTableDirty[uint32_t(ESlotType::ST_T)] = true;
+
+            D3D12_RESOURCE_STATES stateAfter = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+            D3D12_RESOURCE_BARRIER barrier = {};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            barrier.Transition.pResource = pDxTex2D->m_dxResource.m_pResource;
+            barrier.Transition.StateBefore = pDxTex2D->m_dxResource.m_resourceState;
+            barrier.Transition.StateAfter = stateAfter;
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+            pDxTex2D->m_dxResource.m_resourceState = stateAfter;
+            if (barrier.Transition.StateBefore != barrier.Transition.StateAfter)
+            {
+                pDXDevice->m_resouceBarriers.push_back(barrier);
+            }
+        }
+
+        virtual void SetConstantBuffer(std::shared_ptr<CBuffer> constantBuffer, uint32_t bindIndex)override
+        {
+            CDxBuffer* pDxBuffer = static_cast<CDxBuffer*>(constantBuffer.get());
+            m_viewHandles[uint32_t(ESlotType::ST_B)][bindIndex] = pDxBuffer->m_cbv.m_pCpuDescHandle;
+            m_bViewTableDirty[uint32_t(ESlotType::ST_B)] = true;
+        }
+
+        virtual void SetVertexBuffers(std::vector<std::shared_ptr<CBuffer>> vertexBuffers)
+        {
+            m_vbViews.resize(vertexBuffers.size());
+            for (uint32_t index = 0; index < vertexBuffers.size(); index++)
+            {
+                CDxBuffer* dxVertexBuffer = static_cast<CDxBuffer*>(vertexBuffers[index].get());
+                D3D12_VERTEX_BUFFER_VIEW vbView = dxVertexBuffer->m_vbv;
+                m_vbViews[index] = vbView;
+            }
+            m_bVertexBufferDirty = true;
+        }
+
+        virtual void DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation) override
+        {
+            auto pCommandList = pDXDevice->m_pCmdList;
+
+            ApplyPipelineState();
+
+            for (uint32_t index = 0; index < 4; index++)
+            {
+                ApplySlotViews(ESlotType(index));
+            }
+
+            ApplyViewport();
+            ApplyRenderTarget();
+
+            if (pDXDevice->m_resouceBarriers.size() > 0)
+            {
+                pCommandList->ResourceBarrier(pDXDevice->m_resouceBarriers.size(), pDXDevice->m_resouceBarriers.data());
+                pDXDevice->m_resouceBarriers.clear();
+            }
+
+            ApplyVertexBuffers();
+
+            pCommandList->DrawInstanced(vertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
+        }
+
+    private:
+        void ApplyPipelineState()
+        {
+            if (m_bPipelineStateDirty)
+            {
+                auto pCommandList = pDXDevice->m_pCmdList;
+                pCommandList->SetPipelineState(m_pRSPipelinState);
+                pCommandList->SetGraphicsRootSignature(m_pRsGlobalRootSig);
+                m_bPipelineStateDirty = false;
+            }
+        }
+
+        void ApplySlotViews(ESlotType slotType)
+        {
+            uint32_t slotIndex = uint32_t(slotType);
+            if (m_bViewTableDirty[slotIndex])
+            {
+                CheckBinding(m_viewHandles[slotIndex]);
+                auto pCommandList = pDXDevice->m_pCmdList;
+
+                uint32_t numCopy = m_slotDescNum[slotIndex];
+                uint32_t startIndex = m_rsPassDescManager.GetAndAddCurrentPassSlotStart(numCopy);
+                D3D12_CPU_DESCRIPTOR_HANDLE destCPUHandle = m_rsPassDescManager.GetCPUHandle(startIndex);
+                pDXDevice->m_pDevice->CopyDescriptors(1, &destCPUHandle, &numCopy, numCopy, m_viewHandles[slotIndex], nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+                D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle = m_rsPassDescManager.GetGPUHandle(startIndex);
+                pCommandList->SetGraphicsRootDescriptorTable(m_viewSlotIndex[slotIndex], gpuDescHandle);
+
+                m_bViewTableDirty[slotIndex] = false;
+            }
+        }
+
+        void ApplyRenderTarget()
+        {
+            auto pCommandList = pDXDevice->m_pCmdList;
+            if (m_bRenderTargetDirty || m_bDepthStencil)
+            {
+                if (m_bDepthStencil)
+                {
+                    pCommandList->OMSetRenderTargets(m_nRenderTargetNum, m_hRenderTargets, FALSE, &m_hDepthStencil);
+                }
+                else
+                {
+                    pCommandList->OMSetRenderTargets(m_nRenderTargetNum, m_hRenderTargets, FALSE, nullptr);
+                }
+
+                m_bRenderTargetDirty = false;
+                m_bDepthStencil = false;
+            }
+        }
+
+        void ApplyVertexBuffers()
+        {
+            if (m_bVertexBufferDirty)
+            {
+                auto pCommandList = pDXDevice->m_pCmdList;
+                pCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                pCommandList->IASetVertexBuffers(0, m_vbViews.size(), m_vbViews.data());
+                m_bVertexBufferDirty = false;
+            }
+        }
+
+        void ApplyViewport()
+        {
+            if (m_bViewportDirty)
+            {
+                auto pCommandList = pDXDevice->m_pCmdList;
+                pCommandList->RSSetViewports(1, &m_viewPort);
+                pCommandList->RSSetScissorRects(1, &m_scissorRect);
+                m_bViewportDirty = false;
+            }
+        }
+
+        void ResetContext()
+        {
+            m_nRenderTargetNum = 0;
+
+            m_bViewTableDirty[0] = m_bViewTableDirty[1] = m_bViewTableDirty[2] = m_bViewTableDirty[3] = false;
+            m_bPipelineStateDirty = false;
+            m_bRenderTargetDirty = false;
+            m_bDepthStencil = false;
+            m_bVertexBufferDirty = false;
+            m_bViewportDirty = false;
+        }
+
+    private:
+        CDXPassDescManager m_rsPassDescManager;
+
+        D3D12_VIEWPORT m_viewPort;
+        D3D12_RECT m_scissorRect;
+        ID3D12RootSignaturePtr m_pRsGlobalRootSig;
+        ID3D12PipelineStatePtr m_pRSPipelinState;
+
+        std::vector<D3D12_VERTEX_BUFFER_VIEW>m_vbViews;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE m_hRenderTargets[8];
+        D3D12_CPU_DESCRIPTOR_HANDLE m_hDepthStencil;
+        D3D12_CPU_DESCRIPTOR_HANDLE m_viewHandles[4][nHandlePerView];
+        
+        uint32_t m_nRenderTargetNum;
+        uint32_t m_slotDescNum[4];
+        uint32_t m_viewSlotIndex[4];
+        
+        bool m_bViewTableDirty[4];
+        bool m_bPipelineStateDirty;
+        bool m_bRenderTargetDirty;
+        bool m_bDepthStencil;
+        bool m_bVertexBufferDirty;
+        bool m_bViewportDirty;
+    };
+
+    std::shared_ptr<CGraphicsContext> CreateGraphicsContext() 
+    {
+        return std::make_shared<CDxGraphicsContext>();
+    }
 
 }
 
