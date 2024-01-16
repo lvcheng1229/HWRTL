@@ -33,12 +33,12 @@ namespace pvs
 		Init();
 	}
 
-	EAddMeshInstancesResult AddOccluder(const SOccluderDesc& occluderDesc, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices)
+	bool AddOccluder(const SOccluderDesc& occluderDesc, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices)
 	{
-		return EAddMeshInstancesResult();
+		return bool();
 	}
 
-	EAddMeshInstancesResult AddOccluderBound(const SOccluderBound& occluderBound, uint32_t instanceIndex)
+	bool AddOccluderBound(const SOccluderBound& occluderBound, uint32_t instanceIndex)
 	{
 		SMeshInstanceInfo meshInstanceInfo;
 		std::vector<SMeshInstanceInfo> meshInstanceInfos;
@@ -49,7 +49,7 @@ namespace pvs
 		return AddOccluderBounds(occluderBound, meshInstanceInfos, instanceIndices);
 	}
 
-	EAddMeshInstancesResult AddOccluderBounds(const SOccluderBound& occluderBound, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices)
+	bool AddOccluderBounds(const SOccluderBound& occluderBound, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices)
 	{
 		//const Vec3 boundMin = occluderBound.m_min;
 		//const Vec3 boundMax = occluderBound.m_max;
@@ -123,7 +123,7 @@ namespace pvs
 		//SResourceHandle handle = CreateBuffer(meshInstancesDesc.m_pPositionData, meshInstancesDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
 		//
 		//return AddRayTracingMeshInstances(meshInstancesDesc, handle);
-		return EAddMeshInstancesResult::INVALID_INDEX_COUNT;
+		return false;
 	}
 
 	void AddPlayerCell(SPVSCell pvsCell)
@@ -142,7 +142,7 @@ namespace pvs
 		std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_pvs.cpp");
 		std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_pvs.hlsl";
 		
-		CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 1,1,0,0 });
+		//pGiBaker->m_pDeviceCommand->CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 1,1,0,0 });
 	}
 
 	CDynamicBitSet GetVisibility(uint32_t cellIndex)

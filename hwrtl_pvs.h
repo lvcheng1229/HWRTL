@@ -69,10 +69,10 @@ namespace pvs
 		Vec3 m_max;
 	};
 
-	EAddMeshInstancesResult AddOccluder(const SOccluderDesc& occluderDesc, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices);
+	bool AddOccluder(const SOccluderDesc& occluderDesc, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices);
 
-	EAddMeshInstancesResult AddOccluderBound(const SOccluderBound& occluderBound, uint32_t instanceIndex);
-	EAddMeshInstancesResult AddOccluderBounds(const SOccluderBound& occluderBound, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices);
+	bool AddOccluderBound(const SOccluderBound& occluderBound, uint32_t instanceIndex);
+	bool AddOccluderBounds(const SOccluderBound& occluderBound, const std::vector<SMeshInstanceInfo>& meshInstanceInfo, std::vector<uint32_t>& instanceIndices);
 
 	struct SPVSCell
 	{

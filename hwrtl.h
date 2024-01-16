@@ -33,8 +33,6 @@ SOFTWARE.
 //		
 // 
 
-
-
 #pragma once
 #ifndef HWRTL_H
 #define HWRTL_H
@@ -162,16 +160,9 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	using Vec4 = TVec4<float>;
 	using Vec4i = TVec4<int>;
 
-	inline Vec3 NormalizeVec3(Vec3 vec)
-	{
-		float lenght = sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
-		if (lenght > 0.0)
-		{
-			lenght = 1.0 / lenght;
-		}
-		return Vec3(vec.x, vec.y, vec.z) * lenght;
-	}
+	using WstringConverter = std::wstring_convert<std::codecvt_utf8<wchar_t>>;
 
+	inline Vec3 NormalizeVec3(Vec3 vec);
 	inline Vec3 CrossVec3(Vec3 A, Vec3 B)
 	{
 		return Vec3(A.y * B.z - A.z * B.y, A.z * B.x - A.x * B.z, A.x * B.y - A.y * B.x);
@@ -185,102 +176,13 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 			Vec4 row[4];
 		};
 
-		Matrix44()
-		{
-			for (uint32_t i = 0; i < 4; i++)
-				for (uint32_t j = 0; j < 4; j++)
-					m[i][j] = 0;
-		}
-
-		inline void SetIdentity()
-		{
-			row[0] = Vec4(1, 0, 0, 0);
-			row[1] = Vec4(0, 1, 0, 0);
-			row[2] = Vec4(0, 0, 1, 0);
-			row[3] = Vec4(0, 0, 0, 1);
-		}
-
-		inline Matrix44 GetTrasnpose()
-		{
-			Matrix44 C;
-			for (uint32_t i = 0; i < 4; i++)
-				for (uint32_t j = 0; j < 4; j++)
-					C.m[i][j] = m[j][i];
-			return C;
-		}
+		Matrix44();
+		inline void SetIdentity();
+		inline Matrix44 GetTrasnpose();
 	};
 
-	inline Matrix44 MatrixMulti(Matrix44 A, Matrix44 B)
-	{
-		Matrix44 C;
-		for (uint32_t i = 0; i < 4; i++)
-		{
-			for (uint32_t j = 0; j < 4; j++)
-			{
-				C.m[i][j] = A.row[i].Dot(Vec4(B.m[0][j], B.m[1][j], B.m[2][j], B.m[3][j]));
-			}
-		}
-		return C;
-	}
-
-	inline Matrix44 GetViewProjectionMatrixRightHand(Vec3 eyePosition, Vec3 eyeDirection, Vec3 upDirection, float fovAngleY, float aspectRatio, float nearZ, float farZ)
-	{	
-		//reverse z
-		float tempZ = nearZ;
-		nearZ = farZ;
-		farZ = tempZ;
-
-		//wolrd space			 
-		//	  z y				 
-		//	  |/				 
-		//    --->x				 
-		
-		//capera space
-		//	  y
-		//	  |
-		//    ---->x
-		//	 /
-		//  z
-
-		Vec3 zAxis = NormalizeVec3(-eyeDirection);
-		Vec3 xAxis = NormalizeVec3(CrossVec3(upDirection,zAxis));
-		Vec3 yAxis = CrossVec3(zAxis, xAxis);
-
-		Vec3 negEye = -eyePosition;
-
-		Matrix44 camTranslate;
-		camTranslate.SetIdentity();
-		camTranslate.m[0][3] = negEye.x;
-		camTranslate.m[1][3] = negEye.y;
-		camTranslate.m[2][3] = negEye.z;
-
-		Matrix44 camRotate;
-		camRotate.row[0] = Vec4(xAxis.x, xAxis.y, xAxis.z, 0);
-		camRotate.row[1] = Vec4(yAxis.x, yAxis.y, yAxis.z, 0);
-		camRotate.row[2] = Vec4(zAxis.x, zAxis.y, zAxis.z, 0);
-		camRotate.row[3] = Vec4(0, 0, 0, 1);
-
-		Matrix44 viewMat = MatrixMulti(camRotate, camTranslate);
-
-		float radians = 0.5f * fovAngleY * 3.1415926535f / 180.0f;
-		float sinFov = std::sin(radians);
-		float cosFov = std::cos(radians);
-
-		float Height = cosFov / sinFov;
-		float Width = Height / aspectRatio;
-		float fRange = farZ / (nearZ - farZ);
-
-		Matrix44 projMat;
-		projMat.m[0][0] = Width;
-		projMat.m[1][1] = Height;
-		projMat.m[2][2] = fRange;
-		projMat.m[2][3] = fRange * nearZ;
-		projMat.m[3][2] = -1.0f;
-		return MatrixMulti(projMat, viewMat);
-	}
-
-	using WstringConverter = std::wstring_convert<std::codecvt_utf8<wchar_t>>;
-	using SResourceHandle = int;
+	inline Matrix44 MatrixMulti(Matrix44 A, Matrix44 B);
+	inline Matrix44 GetViewProjectionMatrixRightHand(Vec3 eyePosition, Vec3 eyeDirection, Vec3 upDirection, float fovAngleY, float aspectRatio, float nearZ, float farZ);
 
 	// enum class 
 	
@@ -289,14 +191,6 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		NONE,
 		CULL_DISABLE,
 		FRONTFACE_CCW,
-	};
-
-	enum class EAddMeshInstancesResult
-	{
-		SUCESS,
-		INVALID_VERTEX_COUNT, //Not evenly divisible by 3
-		INVALID_INDEX_COUNT, //Not evenly divisible by 3
-		INVALID_INSTANCE_INFO_NUM, // the size of mesh instance info should be > 0
 	};
 
 	enum class ERayShaderType
@@ -355,21 +249,8 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	struct SMeshInstanceInfo
 	{
 		float m_transform[3][4];
-
 		EInstanceFlag m_instanceFlag;
-
-		SMeshInstanceInfo()
-		{
-			for (int i = 0; i < 12; i++)
-			{
-				((float*)m_transform)[i] = 0;
-			}
-			m_transform[0][0] = 1;
-			m_transform[1][1] = 1;
-			m_transform[2][2] = 1;
-
-			m_instanceFlag = EInstanceFlag::NONE;
-		}
+		SMeshInstanceInfo();
 	};
 
 	struct SShader
@@ -474,6 +355,12 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		virtual void WaitGPUCmdListFinish() = 0;
 		virtual void ResetCmdAlloc() = 0;
 
+		virtual std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources) = 0;
+		virtual std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat) = 0;
+
+		virtual std::shared_ptr<CTexture2D> CreateTexture2D(STextureCreateDesc texCreateDesc) = 0;
+		virtual std::shared_ptr<CBuffer> CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage) = 0;
+
 		virtual void BuildBottomLevelAccelerationStructure(std::vector<std::shared_ptr<SGpuBlasData>>& inoutGPUMeshDataPtr) = 0;
 		virtual std::shared_ptr<CTopLevelAccelerationStructure> BuildTopAccelerationStructure(std::vector<std::shared_ptr<SGpuBlasData>>& gpuMeshData) = 0;
 	};
@@ -526,32 +413,128 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	};
 
 	void Init();
-	void DestroyScene();
 	void Shutdown();
 
 	std::shared_ptr <CDeviceCommand> CreateDeviceCommand();
-
-	// Common devie commands
-	std::shared_ptr<CTexture2D> CreateTexture2D(STextureCreateDesc texCreateDesc);
-	std::shared_ptr<CBuffer> CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage);
-
-	// Common context commnad
-	void SubmitCommandlist();
-	void ResetCommandList();
-	void WaitForPreviousFrame();
-	void ResetCmdList();
-
-	// Ray tracing commnad
 	std::shared_ptr<CRayTracingContext> CreateRayTracingContext();
-
-	std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources);
-
-
-	// Rasterization commnad
 	std::shared_ptr<CGraphicsContext> CreateGraphicsContext();
 
-	//TODO: CreateDesc
-	std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat);
+	inline Vec3 NormalizeVec3(Vec3 vec)
+	{
+		float lenght = sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
+		if (lenght > 0.0)
+		{
+			lenght = 1.0 / lenght;
+		}
+		return Vec3(vec.x, vec.y, vec.z) * lenght;
+	}
+
+	inline Matrix44::Matrix44()
+	{
+		for (uint32_t i = 0; i < 4; i++)
+			for (uint32_t j = 0; j < 4; j++)
+				m[i][j] = 0;
+	}
+
+	inline void Matrix44::SetIdentity()
+	{
+		row[0] = Vec4(1, 0, 0, 0);
+		row[1] = Vec4(0, 1, 0, 0);
+		row[2] = Vec4(0, 0, 1, 0);
+		row[3] = Vec4(0, 0, 0, 1);
+	}
+
+	inline Matrix44 Matrix44::GetTrasnpose()
+	{
+		Matrix44 C;
+		for (uint32_t i = 0; i < 4; i++)
+			for (uint32_t j = 0; j < 4; j++)
+				C.m[i][j] = m[j][i];
+		return C;
+	}
+
+	inline Matrix44 MatrixMulti(Matrix44 A, Matrix44 B)
+	{
+		Matrix44 C;
+		for (uint32_t i = 0; i < 4; i++)
+		{
+			for (uint32_t j = 0; j < 4; j++)
+			{
+				C.m[i][j] = A.row[i].Dot(Vec4(B.m[0][j], B.m[1][j], B.m[2][j], B.m[3][j]));
+			}
+		}
+		return C;
+	}
+
+	inline Matrix44 GetViewProjectionMatrixRightHand(
+		Vec3 eyePosition, Vec3 eyeDirection, Vec3 upDirection, float fovAngleY, float aspectRatio, float nearZ, float farZ)
+	{
+		//reverse z
+		float tempZ = nearZ;
+		nearZ = farZ;
+		farZ = tempZ;
+
+		//wolrd space			 
+		//	  z y				 
+		//	  |/				 
+		//    --->x				 
+
+		//capera space
+		//	  y
+		//	  |
+		//    ---->x
+		//	 /
+		//  z
+
+		Vec3 zAxis = NormalizeVec3(-eyeDirection);
+		Vec3 xAxis = NormalizeVec3(CrossVec3(upDirection, zAxis));
+		Vec3 yAxis = CrossVec3(zAxis, xAxis);
+
+		Vec3 negEye = -eyePosition;
+
+		Matrix44 camTranslate;
+		camTranslate.SetIdentity();
+		camTranslate.m[0][3] = negEye.x;
+		camTranslate.m[1][3] = negEye.y;
+		camTranslate.m[2][3] = negEye.z;
+
+		Matrix44 camRotate;
+		camRotate.row[0] = Vec4(xAxis.x, xAxis.y, xAxis.z, 0);
+		camRotate.row[1] = Vec4(yAxis.x, yAxis.y, yAxis.z, 0);
+		camRotate.row[2] = Vec4(zAxis.x, zAxis.y, zAxis.z, 0);
+		camRotate.row[3] = Vec4(0, 0, 0, 1);
+
+		Matrix44 viewMat = MatrixMulti(camRotate, camTranslate);
+
+		float radians = 0.5f * fovAngleY * 3.1415926535f / 180.0f;
+		float sinFov = std::sin(radians);
+		float cosFov = std::cos(radians);
+
+		float Height = cosFov / sinFov;
+		float Width = Height / aspectRatio;
+		float fRange = farZ / (nearZ - farZ);
+
+		Matrix44 projMat;
+		projMat.m[0][0] = Width;
+		projMat.m[1][1] = Height;
+		projMat.m[2][2] = fRange;
+		projMat.m[2][3] = fRange * nearZ;
+		projMat.m[3][2] = -1.0f;
+		return MatrixMulti(projMat, viewMat);
+	}
+
+	inline SMeshInstanceInfo::SMeshInstanceInfo()
+	{
+		for (int i = 0; i < 12; i++)
+		{
+			((float*)m_transform)[i] = 0;
+		}
+		m_transform[0][0] = 1;
+		m_transform[1][1] = 1;
+		m_transform[2][2] = 1;
+
+		m_instanceFlag = EInstanceFlag::NONE;
+	}
 }
 
 #endif
