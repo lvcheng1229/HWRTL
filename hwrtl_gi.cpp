@@ -376,13 +376,14 @@ namespace gi
 
         std::vector<SShader>rtShaders;
         rtShaders.push_back(SShader{ ERayShaderType::RAY_RGS,L"LightMapRayTracingRayGen" });
-        rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"ClostHitMain" });
+        rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"MaterialClosestHitMain" });
+        rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"ShadowClosestHitMain" });
         rtShaders.push_back(SShader{ ERayShaderType::RAY_MIH,L"RayMiassMain" });
 
         std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_gi.cpp");
         std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
 
-        pGiBaker->m_pRayTracingPSO = CGIBaker::GetDeviceCommand()->CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 2,1,0,0 });
+        pGiBaker->m_pRayTracingPSO = CGIBaker::GetDeviceCommand()->CreateRTPipelineStateAndShaderTable(shaderPath, rtShaders, 1, SShaderResources{ 4,2,1,0 });
 
         CGIBaker::GetDeviceCommand()->CloseAndExecuteCmdList();
         CGIBaker::GetDeviceCommand()->WaitGPUCmdListFinish();

@@ -36,7 +36,12 @@ SOFTWARE.
 //      9. we nned to add the shading normal gbuffer? No?
 //      10. merge light map?
 //
+//      11. Light Map GBuffer Generation: https://ndotl.wordpress.com/2018/08/29/baking-artifact-free-lightmaps/
+//
 
+#ifndef INCLUDE_RT_SHADER
+#define INCLUDE_RT_SHADER 1
+#endif
 
 SamplerState gSamPointWarp : register(s0, space1000);
 SamplerState gSamLinearWarp : register(s4, space1000);
@@ -71,31 +76,34 @@ SGeometryVS2PS LightMapGBufferGenVS(SGeometryApp2VS IN )
 
     float2 lightMapCoord = IN.m_lightmapuv * m_lightMapScaleAndBias.xy + m_lightMapScaleAndBias.zw;
 
-    vs2PS.m_positionposition = float4((lightMapCoord - float2(0.5,0.5)) * float2(2.0,-2.0),0.0,1.0);
+    vs2PS.m_position = float4((lightMapCoord - float2(0.5,0.5)) * float2(2.0,-2.0),0.0,1.0);
     vs2PS.m_worldPosition = mul(m_worldTM, float4(IN.m_posistion,1.0));
     return vs2PS;
 }
 
 struct SLightMapGBufferOutput
 {
-    float4 worldPosition :SV_Target0;
-    float4 worldFaceNormal :SV_Target1;
+    float4 m_worldPosition :SV_Target0;
+    float4 m_worldFaceNormal :SV_Target1;
 };
 
 SLightMapGBufferOutput LightMapGBufferGenPS(SGeometryVS2PS IN)
 {
     SLightMapGBufferOutput output;
 
-    float3 faceNormal = normalize(cross(ddx(IN.worldPosition.xyz), ddy(IN.worldPosition.xyz)));
-    float3 deltaPosition = max(abs(ddx(IN.worldPosition)), abs(ddy(IN.worldPosition)));
-    float texelSize = max(deltaPosition.x, max(deltaPosition.y, deltaPosition.z));
-    texelSize *= sqrt(2.0); 
+    float3 faceNormal = normalize(cross(ddx(IN.m_worldPosition.xyz), ddy(IN.m_worldPosition.xyz)));
+    
+    //
+    //float3 deltaPosition = max(abs(ddx(IN.m_worldPosition)), abs(ddy(IN.m_worldPosition)));
+    //float texelSize = max(deltaPosition.x, max(deltaPosition.y, deltaPosition.z));
+    //texelSize *= sqrt(2.0); 
 
-    output.worldPosition      = IN.worldPosition;
-    output.worldFaceNormal = float4(-faceNormal, texelSize);
+    output.m_worldPosition      = IN.m_worldPosition;
+    output.m_worldFaceNormal = float4(-faceNormal, 1.0);
     return output;
 }
 
+#if INCLUDE_RT_SHADER
 /***************************************************************************
 *   LightMap Ray Tracing Pass
 ***************************************************************************/
@@ -139,7 +147,7 @@ cbuffer CRtGlobalConstantBuffer : register(b0)
 RaytracingAccelerationStructure rtScene : register(t0);
 Texture2D<float4> rtWorldPosition : register(t1);
 Texture2D<float4> rtWorldNormal : register(t2);
-StructuredBuffer<SRayTracingLight> rtSceneLights : register(t2);
+StructuredBuffer<SRayTracingLight> rtSceneLights : register(t3);
 
 RWTexture2D<float4> encodedIrradianceAndSubLuma1 : register(u0);
 RWTexture2D<float4> shDirectionalityAndSubLuma2 : register(u1);
@@ -168,17 +176,33 @@ struct SMaterialClosestHitPayload
 
 /***************************************************************************
 *   LightMap Ray Tracing Pass:
-*       Estimate Light
+*       Common function
 ***************************************************************************/
+
+float Pow2(float inputValue)
+{
+    return inputValue * inputValue;
+}
+
+float Pow5(float inputValue)
+{
+    float pow2Value = inputValue * inputValue;
+    return pow2Value * pow2Value * inputValue;
+}
 
 float Luminance(float3 color)
 {
     return dot(color,float3(0.3,0.59,0.11));
 }
 
+/***************************************************************************
+*   LightMap Ray Tracing Pass:
+*       Estimate Light
+***************************************************************************/
+
 float GetLightFallof(float vSquaredDistance,int nLightIndex)
 {
-    float invLightAttenuation = 1.0 / rtSceneLights[nlightIndex].m_vAttenuation;
+    float invLightAttenuation = 1.0 / rtSceneLights[nLightIndex].m_vAttenuation;
     float normalizedSquaredDistance = vSquaredDistance * invLightAttenuation * invLightAttenuation;
     return saturate(1.0 - normalizedSquaredDistance) * saturate(1.0 - normalizedSquaredDistance);
 }
@@ -190,9 +214,9 @@ float EstimateDirectionalLight(uint nlightIndex)
 
 float EstimateSphereLight(uint nlightIndex,float3 worldPosition)
 {
-    float3 lightDirection = float3(rtSceneLights[nlightIndex].m_worldPosition - worldPosition)
+    float3 lightDirection = float3(rtSceneLights[nlightIndex].m_worldPosition - worldPosition);
     float squaredLightDistance = dot(lightDirection,lightDirection);
-    float lightPower = rtSceneLights[nlightIndex].m_color;
+    float lightPower = Luminance(rtSceneLights[nlightIndex].m_color);
 
     return lightPower * GetLightFallof(squaredLightDistance,nlightIndex) / squaredLightDistance;
 }
@@ -292,7 +316,7 @@ struct SRandomSequence
 {
     uint m_nSampleIndex;
     uint m_randomSeed;
-}
+};
 
 float4 GetRandomSampleFloat4(inout SRandomSequence randomSequence)
 {
@@ -373,7 +397,7 @@ void SelectLight(float vRandom, int nLights, inout float aLightPickingCdf[RT_MAX
         else
         {
             nSelectedIndex = nLightIndex + 1;
-            vRange = vRange - (vStep + 1)
+            vRange = vRange - (vStep + 1);
         }
     }
 
@@ -386,9 +410,9 @@ void SelectLight(float vRandom, int nLights, inout float aLightPickingCdf[RT_MAX
 SLightSample SampleDirectionalLight(int nLightIndex, float2 randomSample, float3 worldPos, float3 worldNormal)
 {
     SLightSample lightSample = (SLightSample)0;
-    lightSample.m_radianceOverPdf = rtSceneLights[nlightIndex].m_color / 1.0f;
+    lightSample.m_radianceOverPdf = rtSceneLights[nLightIndex].m_color / 1.0f;
     lightSample.m_pdf = 1.0;
-    lightSample.m_direction = rtSceneLights[nlightIndex].m_lightDirectionl;
+    lightSample.m_direction = rtSceneLights[nLightIndex].m_lightDirectionl;
     lightSample.m_distance = POSITIVE_INFINITY;
     return lightSample;
 }
@@ -398,10 +422,10 @@ SLightSample SampleDirectionalLight(int nLightIndex, float2 randomSample, float3
 // 2. find a better way of handling the region inside the light than just clamping to 1.0 here
 SLightSample SampleSphereLight(int nLightIndex, float2 randomSample, float3 worldPos, float3 worldNormal)
 {
-    float3 lightDirection = rtSceneLights[nlightIndex].m_worldPosition - WorldPos;
+    float3 lightDirection = rtSceneLights[nLightIndex].m_worldPosition - worldPos;
 	float lightDistanceSquared = dot(lightDirection, lightDirection);
 
-    float radius = rtSceneLights[nlightIndex].m_radius;
+    float radius = rtSceneLights[nLightIndex].m_radius;
 	float radius2 = radius * radius;
 
     float sinThetaMax2 = saturate(radius2 / lightDistanceSquared);
@@ -415,15 +439,16 @@ SLightSample SampleSphereLight(int nLightIndex, float2 randomSample, float3 worl
 	lightSample.m_distance = length(lightDirection) * (cosTheta - sqrt(max(sinThetaMax2 - sinTheta2, 0.0)));
     lightSample.m_pdf = dirAndPdf.w;
 
-    float3 lightPower = rtSceneLights[nlightIndex].m_color;
+    float3 lightPower = rtSceneLights[nLightIndex].m_color;
 	float3 lightRadiance = lightPower / (PI * radius2);
 
     lightSample.m_radianceOverPdf = sinThetaMax2 < 0.001 ? lightPower / lightDistanceSquared : lightRadiance / lightSample.m_pdf;
+    return lightSample;
 }
 
 SLightSample SampleLight(int nLightIndex,float2 vRandSample,float3 vWorldPos,float3 vWorldNormal)
 {
-    switch(rtSceneLights[nlightIndex].m_eLightType)
+    switch(rtSceneLights[nLightIndex].m_eLightType)
     {
         case RT_LIGHT_TYPE_DIRECTIONAL: return SampleDirectionalLight(nLightIndex,vRandSample,vWorldPos,vWorldNormal);
         case RT_LIGHT_TYPE_SPHERE: return SampleSphereLight(nLightIndex,vRandSample,vWorldPos,vWorldNormal);
@@ -462,7 +487,7 @@ float3 F_Schlick( float3 SpecularColor, float VoH )
 struct SMaterialEval
 {
     float3 m_weight; 
-}
+};
 
 float CalcLobeSelectionPdf(SMaterialClosestHitPayload payload)
 {
@@ -482,7 +507,7 @@ SMaterialEval SampleDefaultLitMaterial(float3 incomingDirection,float3 outgoingD
     const float3 m_worldL = outgoingDirection;
     const float3 m_worldN = payload.m_worldNormal;
 
-    float roughness = max(ayload.m_roughness,0.01);
+    float roughness = max(payload.m_roughness,0.01);
     float a2 = roughness * roughness;
 
     //TODO:?
@@ -498,27 +523,28 @@ SMaterialEval SampleDefaultLitMaterial(float3 incomingDirection,float3 outgoingD
 
     const float VoH = saturate(dot(V, H));
 
-    const diffLobePdf = CalcLobeSelectionPdf(payload);
+    const float diffLobePdf = CalcLobeSelectionPdf(payload);
     
     //weight * pdf * diff lobe pdf
-    float3 diffWeight = Payload.m_diffuseColor * (NoL / PI) * diffLobePdf;
+    float3 diffWeight = payload.m_diffuseColor * (NoL / PI) * diffLobePdf;
 
     // fr = D * F * G / (4 * NoV * NoL)
     // weight = fr * cosine * (1- diff prob)
     float D = D_GGX(a2,NoH);
-    float G = Vis_SmithJoint(NoV,NoL);
-    float3 F =  F_Schlick(Payload.m_specColor, VoH);
+    float G = Vis_SmithJoint(a2,NoV,NoL);
+    float3 F =  F_Schlick(payload.m_specColor, VoH);
     float3 specWeight = D * F * G / (4 * NoL * NoV) * (NoL) *(1.0 - diffLobePdf);
 
     //TODO: MIS?
-    return diffWeight + specWeight;
+    materialEval.m_weight = diffWeight + specWeight;
+    return materialEval;
 }
 
 SMaterialEval SampleLambertMaterial(float3 outgoingDirection,SMaterialClosestHitPayload payload)
 {
     SMaterialEval materialEval = (SMaterialEval)0;
-    float3 N_World = Payload.m_worldNormal;
-	float NoL = saturate(dot(N_World, OutgoingDirection));
+    float3 N_World = payload.m_worldNormal;
+	float NoL = saturate(dot(N_World, outgoingDirection));
     
     // weight = m_baseColor pdf = NoL / PI
     materialEval.m_weight = payload.m_baseColor * (NoL / PI);
@@ -609,7 +635,7 @@ void DoRayTracing(
             break;
         }
 
-        if(rtRaylod.m_eFlag & RT_PAYLOAD_FLAG_FRONT_FACE == 0)
+        if((rtRaylod.m_eFlag & RT_PAYLOAD_FLAG_FRONT_FACE) == 0)
         {
             bIsValidSample = false;
             return;
@@ -685,7 +711,7 @@ void DoRayTracing(
                         //materialEval.m_weight = fr * cos
                         float3 lightContrib = pathThroughput * lightSample.m_radianceOverPdf * materialEval.m_weight;
 
-                        if (Bounce > 0)
+                        if (bounce > 0)
                         {
                             
                         }
@@ -711,7 +737,8 @@ void DoRayTracing(
 void LightMapRayTracingRayGen()
 {
     const uint2 rayIndex = DispatchRaysIndex().xy;
-    rtOutput[rayIndex] = float4(0.0, 0.0, 1.0, 0.0);
+    shDirectionalityAndSubLuma2[rayIndex] = float4(0.0, 0.0, 1.0, 0.0);
+    encodedIrradianceAndSubLuma1[rayIndex] = float4(0.0, 0.0, 1.0, 0.0);
 
     float3 worldPosition = rtWorldPosition[rayIndex].xyz;
     float3 worldFaceNormal = rtWorldNormal[rayIndex].xyz;
@@ -725,14 +752,16 @@ void LightMapRayTracingRayGen()
 
     SRandomSequence randomSequence;
     randomSequence.m_randomSeed = rayIndex.y * m_nAtlasSize.x + rayIndex.x;
-    randomSequence.SampleIndex = 0;
+    randomSequence.m_nSampleIndex = 0;
+
+    float3 radianceValue = 0; // unused currently
 
     float3 directionalLightRadianceValue = 0;
     float3 directionalLightRadianceDirection = 0;
     
     DoRayTracing(worldPosition,worldFaceNormal,randomSequence,bIsValidSample,directionalLightRadianceValue,directionalLightRadianceDirection);
     
-    if (any(isnan(RadianceValue)) || any(RadianceValue < 0) || any(isinf(RadianceValue)))
+    if (any(isnan(radianceValue)) || any(radianceValue < 0) || any(isinf(radianceValue)))
 	{
 		bIsValidSample = false;
 	}
@@ -761,7 +790,7 @@ void LightMapRayTracingRayGen()
         const half LogBlackPoint = 0.01858136;
         encodedIrradianceAndSubLuma1[rayIndex] = float4(
             sqrt(max(irradianceAndSampleCount.rgb, float3(0.00001, 0.00001, 0.00001))),
-            log2( 1 + LogBlackPoint ) - (swizzedSH.w / 255 - 0.5 / 255))
+            log2( 1 + LogBlackPoint ) - (swizzedSH.w / 255 - 0.5 / 255));
     }
 
 }
@@ -785,6 +814,7 @@ void RayMiassMain(inout SMaterialClosestHitPayload payload)
 {
     payload.m_vHiTt = -1.0;
 }
+#endif
 
 /***************************************************************************
 *   LightMap Visualize Pass

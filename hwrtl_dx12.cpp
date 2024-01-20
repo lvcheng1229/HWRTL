@@ -774,7 +774,7 @@ namespace hwrtl
     * Dx12 Create RayTracing Pipeline State Helper Function
     ***************************************************************************/
 
-    static IDxcBlobPtr Dx12CompileRayTracingLibraryDXC(const std::wstring& shaderPath, LPCWSTR pEntryPoint, LPCWSTR pTargetProfile)
+    static IDxcBlobPtr Dx12CompileRayTracingLibraryDXC(const std::wstring& shaderPath, LPCWSTR pEntryPoint, LPCWSTR pTargetProfile, DxcDefine* dxcDefine,uint32_t defineCount)
     {
         std::ifstream shaderFile(shaderPath);
 
@@ -794,7 +794,7 @@ namespace hwrtl
         IDxcOperationResultPtr pValidResult;
 
         ThrowIfFailed(pDXDevice->m_pLibrary->CreateBlobWithEncodingFromPinned((LPBYTE)shader.c_str(), (uint32_t)shader.size(), 0, &pTextBlob));
-        ThrowIfFailed(pDXDevice->m_pDxcCompiler->Compile(pTextBlob, shaderPath.data(), pEntryPoint, pTargetProfile, nullptr, 0, nullptr, 0, nullptr, &pResult));
+        ThrowIfFailed(pDXDevice->m_pDxcCompiler->Compile(pTextBlob, shaderPath.data(), pEntryPoint, pTargetProfile, nullptr, 0, dxcDefine, defineCount, nullptr, &pResult));
         ThrowIfFailed(pResult->GetStatus(&resultCode));
         
         if (FAILED(resultCode))
@@ -1286,7 +1286,10 @@ namespace hwrtl
         uint32_t subObjectsIndex = 0;
 
         // create dxil subobjects
-        ID3DBlobPtr pDxilLib = Dx12CompileRayTracingLibraryDXC(shaderPath, L"", L"lib_6_3");
+        DxcDefine dxcDefine;
+        dxcDefine.Name = L"INCLUDE_RT_SHADER";
+        dxcDefine.Value = L"1";
+        ID3DBlobPtr pDxilLib = Dx12CompileRayTracingLibraryDXC(shaderPath, L"", L"lib_6_3", &dxcDefine, 1);
         SDxilLibrary dxilLib(pDxilLib, pEntryPoint.data(), pEntryPoint.size());
         stateSubObjects[subObjectsIndex] = dxilLib.m_stateSubobject;
         subObjectsIndex++;
@@ -1483,8 +1486,10 @@ namespace hwrtl
                 bool bVS = rtShaders[index].m_eShaderType == ERayShaderType::RS_VS;
                 LPCWSTR pTarget = bVS ? L"vs_6_1" : L"ps_6_1";
                 uint32_t shaderIndex = bVS ? 0 : 1;
-
-                shaders[shaderIndex] = Dx12CompileRayTracingLibraryDXC(filename.c_str(), rtShaders[index].m_entryPoint.c_str(), pTarget);
+                DxcDefine dxcDefine;
+                dxcDefine.Name = L"INCLUDE_RT_SHADER";
+                dxcDefine.Value = L"0";
+                shaders[shaderIndex] = Dx12CompileRayTracingLibraryDXC(filename.c_str(), rtShaders[index].m_entryPoint.c_str(), pTarget, &dxcDefine, 1);
             }
 
             std::vector<D3D12_INPUT_ELEMENT_DESC>inputElementDescs;
