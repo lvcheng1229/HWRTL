@@ -276,7 +276,7 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     bakeMeshDescs.push_back(backPlane);
 }
 
-void ExamplerDestroyScene()
+void ExampleDestroyScene()
 {
     boxGeoPositions.~vector();
     boxGeoLightMapUV.~vector();
@@ -316,7 +316,7 @@ int main()
         PrePareVisualizeResultPass();
         ExecuteVisualizeResultPass();
         DeleteGIBaker();
-        ExamplerDestroyScene();
+        ExampleDestroyScene();
     }
     _CrtDumpMemoryLeaks();
     return 0;
