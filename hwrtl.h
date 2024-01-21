@@ -26,7 +26,7 @@ SOFTWARE.
 // DOCUMENTATION
 // 
 // Dx12 hardware ray tracing library usage:
-//		step 1. copy hwrtl.h, d3dx12.h, hwrtl_dx12.cpp to your project
+//		step 1. copy hwrtl.h, hwrtl_dx12.cpp to your project
 //		step 2. enable graphics api by #define ENABLE_DX12_WIN 1
 // 
 // Vk hardware ray tracing libirary usage:
@@ -347,6 +347,32 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		std::shared_ptr<CBottomLevelAccelerationStructure>m_pBLAS;
 	};
 
+	struct SShaderDefine
+	{
+		std::wstring m_defineName;
+		std::wstring m_defineValue;
+	};
+
+	struct SRayTracingPSOCreateDesc
+	{
+		std::wstring filename; 
+		std::vector<SShader>rtShaders; 
+		uint32_t maxTraceRecursionDepth; 
+		SShaderResources rayTracingResources; 
+		SShaderDefine* shaderDefines; 
+		uint32_t defineNum;
+	};
+
+	struct SRasterizationPSOCreateDesc
+	{
+		std::wstring filename; 
+		std::vector<SShader>rtShaders; 
+		SShaderResources rasterizationResources; 
+		std::vector<EVertexFormat>vertexLayouts; 
+		std::vector<ETexFormat>rtFormats; 
+		ETexFormat dsFormat;
+	};
+
 	class CDeviceCommand
 	{
 	public:
@@ -355,8 +381,8 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 		virtual void WaitGPUCmdListFinish() = 0;
 		virtual void ResetCmdAlloc() = 0;
 
-		virtual std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(const std::wstring filename, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources) = 0;
-		virtual std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat) = 0;
+		virtual std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(SRayTracingPSOCreateDesc& rtPsoDesc) = 0;
+		virtual std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(SRasterizationPSOCreateDesc& rsPsoDesc) = 0;
 
 		virtual std::shared_ptr<CTexture2D> CreateTexture2D(STextureCreateDesc texCreateDesc) = 0;
 		virtual std::shared_ptr<CBuffer> CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage) = 0;
@@ -385,7 +411,11 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 
 		virtual void SetTLAS(std::shared_ptr<CTopLevelAccelerationStructure> tlas, uint32_t bindIndex) = 0;
 		virtual void SetShaderSRV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex) = 0;
+		virtual void SetShaderSRV(std::shared_ptr<CBuffer>buffer, uint32_t bindIndex) = 0;
+
 		virtual void SetShaderUAV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex) = 0;
+
+		virtual void SetConstantBuffer(std::shared_ptr<CBuffer> constantBuffer, uint32_t bindIndex) = 0;
 
 		virtual void DispatchRayTracicing(uint32_t width, uint32_t height) = 0;
 	};

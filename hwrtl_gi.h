@@ -44,12 +44,15 @@ namespace gi
 	struct SBakeConfig
 	{
 		uint32_t m_maxAtlasSize;
+		bool m_bDebugRayTracing = false; // see RT_DEBUG_OUTPUT in hwrtl_gi.hlsl
+		bool m_bAddVisualizePass = false;
 	};
 
 	struct SBakeMeshDesc
 	{
 		const Vec3* m_pPositionData = nullptr;
 		const Vec2* m_pLightMapUVData = nullptr;
+		const Vec3* m_pNormalData = nullptr; // unused
 
 		uint32_t m_nVertexCount = 0;
 		Vec2i m_nLightMapSize;
@@ -60,6 +63,9 @@ namespace gi
 	void InitGIBaker(SBakeConfig bakeConfig);
 	void AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc);
 	void AddBakeMeshsAndCreateVB(const std::vector<SBakeMeshDesc>& bakeMeshDescs);
+
+	void AddDirectionalLight(Vec3 color, Vec3 direction, bool isStationary);
+	void AddSphereLight(Vec3 color, Vec3 worldPosition, bool isStationary, float attenuation, float radius);
 
 	void PrePareLightMapGBufferPass();
 	void ExecuteLightMapGBufferPass();

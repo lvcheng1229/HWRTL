@@ -40,6 +40,7 @@ SOFTWARE.
 //      7. ERayShaderType to ERayShaderType and EShaderType
 //      8. get immediate cmd list for create and upload buffer
 //      9. https://github.com/sebbbi/OffsetAllocator
+//      10. fix subobject desc extent bug: see Unreal CreateRayTracingStateObject
 //
 
 
@@ -181,7 +182,7 @@ namespace hwrtl
     public:
         ~CDxTexture2D()
         {
-            // Release Desc In Desc Manager
+            // TODO: Release Desc In Desc Manager
         }
 
         CDx12Resouce m_dxResource;
@@ -197,7 +198,7 @@ namespace hwrtl
     public:
         ~CDxBuffer()
         {
-            // Release Desc In Desc Manager
+            // TODO: Release Desc In Desc Manager
         }
 
         CDx12Resouce m_dxResource;
@@ -305,6 +306,8 @@ namespace hwrtl
         void Init();
     };
 
+
+
     static CDXDevice* pDXDevice = nullptr;
     
     class CDxDeviceCommand : public CDeviceCommand
@@ -314,8 +317,8 @@ namespace hwrtl
         virtual void CloseAndExecuteCmdList()override;
         virtual void WaitGPUCmdListFinish()override;
         virtual void ResetCmdAlloc() override;
-        virtual std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(const std::wstring shaderPath, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources)override;
-        virtual std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat)override;
+        virtual std::shared_ptr<CRayTracingPipelineState> CreateRTPipelineStateAndShaderTable(SRayTracingPSOCreateDesc& rtPsoDesc)override;
+        virtual std::shared_ptr<CGraphicsPipelineState>  CreateRSPipelineState(SRasterizationPSOCreateDesc& rsPsoDesc)override;
         virtual std::shared_ptr<CTexture2D> CreateTexture2D(STextureCreateDesc texCreateDesc) override;
         virtual std::shared_ptr<CBuffer> CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage) override;
         virtual void BuildBottomLevelAccelerationStructure(std::vector< std::shared_ptr<SGpuBlasData>>& inoutGPUMeshData)override;
@@ -334,7 +337,11 @@ namespace hwrtl
 
         virtual void SetTLAS(std::shared_ptr<CTopLevelAccelerationStructure> tlas, uint32_t bindIndex)override;
         virtual void SetShaderSRV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex)override;
+        virtual void SetShaderSRV(std::shared_ptr<CBuffer>buffer, uint32_t bindIndex) override;
+
         virtual void SetShaderUAV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex)override;
+
+        virtual void SetConstantBuffer(std::shared_ptr<CBuffer> constantBuffer, uint32_t bindIndex)override;
 
         virtual void DispatchRayTracicing(uint32_t width, uint32_t height)override;
     private:
@@ -855,41 +862,6 @@ namespace hwrtl
         std::vector<std::wstring> m_exportName;
     };
 
-    struct SHitProgram
-    {
-        SHitProgram() {};
-        SHitProgram(LPCWSTR ahsExport, LPCWSTR chsExport, LPCWSTR hgExport)
-        {
-            m_desc = {};
-            m_desc.AnyHitShaderImport = ahsExport;
-            m_desc.ClosestHitShaderImport = chsExport;
-            m_desc.HitGroupExport = hgExport;
-
-            m_subObject.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-            m_subObject.pDesc = &m_desc;
-        }
-
-        D3D12_HIT_GROUP_DESC m_desc = {};
-        D3D12_STATE_SUBOBJECT m_subObject = {};
-    };
-
-    struct SExportAssociation
-    {
-        SExportAssociation() {}
-        SExportAssociation(const WCHAR* exportNames[], uint32_t exportCount, const D3D12_STATE_SUBOBJECT* pSubobjectToAssociate)
-        {
-            m_association.NumExports = exportCount;
-            m_association.pExports = exportNames;
-            m_association.pSubobjectToAssociate = pSubobjectToAssociate;
-
-            m_subobject.Type = D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION;
-            m_subobject.pDesc = &m_association;
-        }
-
-        D3D12_STATE_SUBOBJECT m_subobject = {};
-        D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION m_association = {};
-    };
-
     struct SPipelineConfig
     {
         SPipelineConfig(uint32_t maxTraceRecursionDepth)
@@ -1248,8 +1220,15 @@ namespace hwrtl
         Dx12ResetCmdAllocInternal();
     }
 
-    std::shared_ptr<CRayTracingPipelineState> CDxDeviceCommand::CreateRTPipelineStateAndShaderTable(const std::wstring shaderPath, std::vector<SShader>rtShaders, uint32_t maxTraceRecursionDepth, SShaderResources rayTracingResources)
+    std::shared_ptr<CRayTracingPipelineState> CDxDeviceCommand::CreateRTPipelineStateAndShaderTable(SRayTracingPSOCreateDesc& rtPsoDesc)
     {
+        const std::wstring shaderPath = rtPsoDesc.filename;
+        std::vector<SShader>rtShaders = rtPsoDesc.rtShaders;
+        uint32_t maxTraceRecursionDepth = rtPsoDesc.maxTraceRecursionDepth;
+        SShaderResources rayTracingResources = rtPsoDesc.rayTracingResources;
+        SShaderDefine* shaderDefines = rtPsoDesc.shaderDefines;
+        uint32_t defineNum = rtPsoDesc.defineNum;
+
         std::shared_ptr<CDxRayTracingPipelineState> pDxRayTracingPipelineState = std::make_shared<CDxRayTracingPipelineState>();
         for (uint32_t index = 0; index < 4; index++)
         {
@@ -1278,8 +1257,8 @@ namespace hwrtl
         uint32_t subObjectsNum = 1 + hitProgramNum + 2 + 1 + 1; // dxil subobj + hit program number + shader config * 2 + pipeline config + global root signature * 1
 
         std::vector<D3D12_STATE_SUBOBJECT> stateSubObjects;
-        std::vector<SHitProgram>hitProgramSubObjects;
-        hitProgramSubObjects.resize(hitProgramNum);
+        std::vector<D3D12_HIT_GROUP_DESC>hitgroupDesc;
+        hitgroupDesc.resize(hitProgramNum);
         stateSubObjects.resize(subObjectsNum);
 
         uint32_t hitProgramIndex = 0;
@@ -1289,10 +1268,22 @@ namespace hwrtl
         DxcDefine dxcDefine;
         dxcDefine.Name = L"INCLUDE_RT_SHADER";
         dxcDefine.Value = L"1";
-        ID3DBlobPtr pDxilLib = Dx12CompileRayTracingLibraryDXC(shaderPath, L"", L"lib_6_3", &dxcDefine, 1);
+
+        std::vector<DxcDefine>dxcDefines;
+        dxcDefines.resize(defineNum + 1);
+        for (uint32_t index = 0; index < defineNum; index++)
+        {
+            dxcDefines[index].Name = shaderDefines[index].m_defineName.c_str();
+            dxcDefines[index].Value = shaderDefines[index].m_defineValue.c_str();
+        }
+        dxcDefines[defineNum] = dxcDefine;
+
+        ID3DBlobPtr pDxilLib = Dx12CompileRayTracingLibraryDXC(shaderPath, L"", L"lib_6_3", dxcDefines.data(), dxcDefines.size());
         SDxilLibrary dxilLib(pDxilLib, pEntryPoint.data(), pEntryPoint.size());
         stateSubObjects[subObjectsIndex] = dxilLib.m_stateSubobject;
         subObjectsIndex++;
+
+        //entryIndex = InstanceContributionToHitGroupIndex + GeometryIndex * MultiplierForGeometryContributionToShaderIndex + RayContributionToHitGroupIndex;
 
         // create root signatures and export asscociation
         std::vector<const WCHAR*> emptyRootSigEntryPoints;
@@ -1302,31 +1293,41 @@ namespace hwrtl
             switch (rtShader.m_eShaderType)
             {
             case ERayShaderType::RAY_AHS:
-                hitProgramSubObjects[hitProgramIndex] = SHitProgram(rtShader.m_entryPoint.data(), nullptr, pHitGroupExports[hitProgramIndex].c_str());
-                stateSubObjects[subObjectsIndex++] = hitProgramSubObjects[hitProgramIndex].m_subObject;
-                hitProgramIndex++;
+                hitgroupDesc[hitProgramIndex].HitGroupExport = pHitGroupExports[hitProgramIndex].c_str();
+                hitgroupDesc[hitProgramIndex].Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+                hitgroupDesc[hitProgramIndex].AnyHitShaderImport = rtShader.m_entryPoint.data();
+                hitgroupDesc[hitProgramIndex].ClosestHitShaderImport = nullptr;
                 break;
             case ERayShaderType::RAY_CHS:
-                hitProgramSubObjects[hitProgramIndex] = SHitProgram(nullptr, rtShader.m_entryPoint.data(), pHitGroupExports[hitProgramIndex].c_str());
-                stateSubObjects[subObjectsIndex++] = hitProgramSubObjects[hitProgramIndex].m_subObject;
+                hitgroupDesc[hitProgramIndex].HitGroupExport = pHitGroupExports[hitProgramIndex].c_str();
+                hitgroupDesc[hitProgramIndex].Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+                hitgroupDesc[hitProgramIndex].AnyHitShaderImport = nullptr;
+                hitgroupDesc[hitProgramIndex].ClosestHitShaderImport = rtShader.m_entryPoint.data();
                 hitProgramIndex++;
                 break;
             }
         }
 
-        // shader config subobject and export associations
-        SExportAssociation sgExportAssociation;
+        for (uint32_t indexHit = 0; indexHit < hitProgramNum; indexHit++)
         {
-            D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
-            shaderConfig.MaxAttributeSizeInBytes = D3D12_RAYTRACING_MAX_ATTRIBUTE_SIZE_IN_BYTES;
-            shaderConfig.MaxPayloadSizeInBytes = MaxPayloadSizeInBytes;
-            D3D12_STATE_SUBOBJECT configSubobject = {};
-            configSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
-            configSubobject.pDesc = &shaderConfig;
-            stateSubObjects[subObjectsIndex] = configSubobject;
-            sgExportAssociation = SExportAssociation(pEntryPoint.data(), pEntryPoint.size(), &stateSubObjects[subObjectsIndex++]);
-            stateSubObjects[subObjectsIndex++] = sgExportAssociation.m_subobject;
+            stateSubObjects[subObjectsIndex++] = D3D12_STATE_SUBOBJECT{ D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP ,&hitgroupDesc[indexHit] };
         }
+
+        // shader config subobject and export associations
+        
+        D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
+        shaderConfig.MaxAttributeSizeInBytes = D3D12_RAYTRACING_MAX_ATTRIBUTE_SIZE_IN_BYTES;
+        shaderConfig.MaxPayloadSizeInBytes = MaxPayloadSizeInBytes;
+        D3D12_STATE_SUBOBJECT configSubobject = {};
+        configSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
+        configSubobject.pDesc = &shaderConfig;
+        stateSubObjects[subObjectsIndex] = configSubobject;
+
+        D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION sgExportAssociation = {};
+        sgExportAssociation.NumExports = pEntryPoint.size();
+        sgExportAssociation.pExports = pEntryPoint.data();
+        sgExportAssociation.pSubobjectToAssociate = &stateSubObjects[subObjectsIndex++];
+        stateSubObjects[subObjectsIndex++] = D3D12_STATE_SUBOBJECT{ D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION ,&sgExportAssociation };
 
         // pipeline config
         {
@@ -1409,8 +1410,15 @@ namespace hwrtl
         return pDxRayTracingPipelineState;
     }
 
-    std::shared_ptr<CGraphicsPipelineState>  CDxDeviceCommand::CreateRSPipelineState(const std::wstring filename, std::vector<SShader>rtShaders, SShaderResources rasterizationResources, std::vector<EVertexFormat>vertexLayouts, std::vector<ETexFormat>rtFormats, ETexFormat dsFormat)
+    std::shared_ptr<CGraphicsPipelineState>  CDxDeviceCommand::CreateRSPipelineState(SRasterizationPSOCreateDesc& rsPsoDesc)
     {
+        const std::wstring filename = rsPsoDesc.filename;
+        std::vector<SShader>rtShaders = rsPsoDesc.rtShaders;
+        SShaderResources rasterizationResources = rsPsoDesc.rasterizationResources;
+        std::vector<EVertexFormat>vertexLayouts = rsPsoDesc.vertexLayouts;
+        std::vector<ETexFormat>rtFormats = rsPsoDesc.rtFormats;
+        ETexFormat dsFormat = rsPsoDesc.dsFormat;
+
         auto dxGaphicsPipelineState = std::make_shared<CDxGraphicsPipelineState>();
         auto pDevice = pDXDevice->m_pDevice;
 
@@ -1961,6 +1969,15 @@ namespace hwrtl
         pDXDevice->dxBarrierManager.AddResourceBarrier(&pDxTex2D->m_dxResource, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
     }
 
+    void CDx12RayTracingContext::SetShaderSRV(std::shared_ptr<CBuffer>buffer, uint32_t bindIndex)
+    {
+        CDxBuffer* pDxBuffer = static_cast<CDxBuffer*>(buffer.get());
+        m_viewHandles[uint32_t(ESlotType::ST_T)][bindIndex] = pDxBuffer->m_srv.m_pCpuDescHandle;
+        m_bViewTableDirty[uint32_t(ESlotType::ST_T)] = true;
+
+        pDXDevice->dxBarrierManager.AddResourceBarrier(&pDxBuffer->m_dxResource, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    }
+
     void CDx12RayTracingContext::SetShaderUAV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex)
     {
         CDxTexture2D* pDxTex2D = static_cast<CDxTexture2D*>(tex2D.get());
@@ -1968,6 +1985,13 @@ namespace hwrtl
         m_bViewTableDirty[uint32_t(ESlotType::ST_U)] = true;
 
         pDXDevice->dxBarrierManager.AddResourceBarrier(&pDxTex2D->m_dxResource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    void hwrtl::CDx12RayTracingContext::SetConstantBuffer(std::shared_ptr<CBuffer> constantBuffer, uint32_t bindIndex)
+    {
+                CDxBuffer* pDxBuffer = static_cast<CDxBuffer*>(constantBuffer.get());
+        m_viewHandles[uint32_t(ESlotType::ST_B)][bindIndex] = pDxBuffer->m_cbv.m_pCpuDescHandle;
+        m_bViewTableDirty[uint32_t(ESlotType::ST_B)] = true;
     }
 
     void CDx12RayTracingContext::DispatchRayTracicing(uint32_t width, uint32_t height)
@@ -2101,7 +2125,7 @@ namespace hwrtl
         m_viewSlotIndex[0] = 0;
         for (uint32_t index = 1; index < 4; index++)
         {
-            m_viewSlotIndex[index] = m_viewSlotIndex[index - 1] + m_slotDescNum[index - 1];
+            m_viewSlotIndex[index] = m_viewSlotIndex[index - 1] + (m_slotDescNum[index - 1] > 0 ? 1 : 0);
         }
 
         m_bPipelineStateDirty = true;

@@ -37,11 +37,20 @@ SOFTWARE.
 //      10. merge light map?
 //
 //      11. Light Map GBuffer Generation: https://ndotl.wordpress.com/2018/08/29/baking-artifact-free-lightmaps/
+//      12. shadow ray bias optimization
+//
+//      13. should we add luma to light map?
+//      14. light add and scale factor : use 10 1 for now,we should add a post process pass to get the max negetive value
+//      15. SHBasisFunction in unreal sh projection factor is 0.28 -0.48 0.48 -0.48? 
 //
 
-#ifndef INCLUDE_RT_SHADER
-#define INCLUDE_RT_SHADER 1
-#endif
+//#ifndef INCLUDE_RT_SHADER
+//#define INCLUDE_RT_SHADER 1
+//#endif
+//
+//#ifdef RT_DEBUG_OUTPUT
+//#define RT_DEBUG_OUTPUT 0
+//#endif
 
 SamplerState gSamPointWarp : register(s0, space1000);
 SamplerState gSamLinearWarp : register(s4, space1000);
@@ -130,18 +139,23 @@ static const uint maxBounces = 32;
 struct SRayTracingLight
 {
     float3 m_color; // light power
-    float3 m_lightDirectionl; // light direction
     uint m_isStationary; // stationary or static light
+
+    float3 m_lightDirectionl; // light direction
     uint m_eLightType; // spjere light / directional light
+
     float3 m_worldPosition; // spjere light world position
     float m_vAttenuation; // spjere light attenuation
+
     float m_radius; // spjere light radius
+    float3 m_rtLightpadding;
 };
 
 cbuffer CRtGlobalConstantBuffer : register(b0)
 {
     uint m_nRtSceneLightCount;
     uint2 m_nAtlasSize;
+    float m_rtGlobalCbPadding[61];
 };
 
 RaytracingAccelerationStructure rtScene : register(t0);
@@ -318,6 +332,17 @@ struct SRandomSequence
     uint m_randomSeed;
 };
 
+uint StrongIntegerHash(uint x)
+{
+	// From https://github.com/skeeto/hash-prospector
+	x ^= x >> 16;
+	x *= 0xa812d533;
+	x ^= x >> 15;
+	x *= 0xb278e4ad;
+	x ^= x >> 17;
+	return x;
+}
+
 float4 GetRandomSampleFloat4(inout SRandomSequence randomSequence)
 {
     float4 result;
@@ -385,6 +410,19 @@ struct SLightSample
 
 void SelectLight(float vRandom, int nLights, inout float aLightPickingCdf[RT_MAX_SCENE_LIGHT], out uint nSelectedIndex, out float vLightPickPdf)
 {
+#if 1
+    float preCdf = 0;
+    for(nSelectedIndex = 0; nSelectedIndex < nLights;nSelectedIndex++)
+    {
+        if(vRandom < aLightPickingCdf[nSelectedIndex])
+        {
+            break;
+        }
+        preCdf = aLightPickingCdf[nSelectedIndex];
+    }
+
+    vLightPickPdf = aLightPickingCdf[nSelectedIndex] - preCdf;
+#else
     nSelectedIndex = 0;
     for(int vRange = nLights; vRange > 0;)
     {
@@ -402,6 +440,7 @@ void SelectLight(float vRandom, int nLights, inout float aLightPickingCdf[RT_MAX
     }
 
     vLightPickPdf = aLightPickingCdf[nSelectedIndex] - (nSelectedIndex > 0 ? aLightPickingCdf[nSelectedIndex - 1] : 0.0);
+#endif
 }
 
 //TODO:
@@ -412,7 +451,7 @@ SLightSample SampleDirectionalLight(int nLightIndex, float2 randomSample, float3
     SLightSample lightSample = (SLightSample)0;
     lightSample.m_radianceOverPdf = rtSceneLights[nLightIndex].m_color / 1.0f;
     lightSample.m_pdf = 1.0;
-    lightSample.m_direction = rtSceneLights[nLightIndex].m_lightDirectionl;
+    lightSample.m_direction = normalize(rtSceneLights[nLightIndex].m_lightDirectionl);
     lightSample.m_distance = POSITIVE_INFINITY;
     return lightSample;
 }
@@ -435,7 +474,7 @@ SLightSample SampleSphereLight(int nLightIndex, float2 randomSample, float3 worl
 	float sinTheta2 = 1.0 - cosTheta * cosTheta;
 
     SLightSample lightSample = (SLightSample)0;
-	lightSample.m_direction = TangentToWorld(dirAndPdf.xyz, normalize(lightDirection));
+	lightSample.m_direction = normalize(TangentToWorld(dirAndPdf.xyz, normalize(lightDirection)));
 	lightSample.m_distance = length(lightDirection) * (cosTheta - sqrt(max(sinThetaMax2 - sinTheta2, 0.0)));
     lightSample.m_pdf = dirAndPdf.w;
 
@@ -576,13 +615,14 @@ SMaterialEval EvalMaterial(
 ***************************************************************************/
 
 //TODO: ReduceSHRinging https://zhuanlan.zhihu.com/p/144910975
+//https://upload-images.jianshu.io/upload_images/26934647-52d3e477a26bb1aa.png?imageMogr2/auto-orient/strip|imageView2/2/w/750/format/webp
 float4 SHBasisFunction(float3 inputVector)
 {
 	float4 projectionResult;
 	projectionResult.x = 0.282095f; 
-	projectionResult.y = -0.488603f * inputVector.y;
+	projectionResult.y = 0.488603f * inputVector.y;
 	projectionResult.z = 0.488603f * inputVector.z;
-	projectionResult.w = -0.488603f * inputVector.x;
+	projectionResult.w = 0.488603f * inputVector.x;
 	return projectionResult;
 }
 
@@ -592,6 +632,9 @@ float4 SHBasisFunction(float3 inputVector)
 ***************************************************************************/
 
 void DoRayTracing(
+#if RT_DEBUG_OUTPUT
+    inout float4 rtDebugOutput,
+#endif
     float3 worldPosition,
     float3 faceNormal,
     inout SRandomSequence randomSequence,
@@ -650,11 +693,14 @@ void DoRayTracing(
             float3 worldPosition = rtRaylod.m_worldPosition;
             float3 worldNormal = rtRaylod.m_worldNormal;
 
+
             for(uint index = 0; index < m_nRtSceneLightCount; index++)
             {
                 vLightPickingCdfPreSum += EstimateLight(index,worldPosition,worldNormal);
                 aLightPickingCdf[index] = vLightPickingCdfPreSum;
             }
+
+
 
             if (vLightPickingCdfPreSum > 0)
             {
@@ -664,9 +710,14 @@ void DoRayTracing(
                 SelectLight(randomSample.x * vLightPickingCdfPreSum,m_nRtSceneLightCount,aLightPickingCdf,nSelectedLightIndex,vSlectedLightPdf);
                 vSlectedLightPdf /= vLightPickingCdfPreSum;
 
+#if RT_DEBUG_OUTPUT
+                rtDebugOutput = float4(aLightPickingCdf[0],aLightPickingCdf[1],randomSample.x * vLightPickingCdfPreSum,1);
+#endif
                 SLightSample lightSample = SampleLight(nSelectedLightIndex,randomSample.yz,worldPosition,worldNormal);
                 lightSample.m_radianceOverPdf /= vSlectedLightPdf;
                 lightSample.m_pdf *= vSlectedLightPdf;
+
+
 
                 if(lightSample.m_pdf > 0)
                 {
@@ -676,7 +727,7 @@ void DoRayTracing(
                         
                         RayDesc shadowRay;
                         shadowRay.Origin = worldPosition;
-                        shadowRay.TMin = 0.01f; // TODO: Apply A Bias
+                        shadowRay.TMin = 0.0f;
                         shadowRay.Direction = lightSample.m_direction;
                         shadowRay.TMax = lightSample.m_distance;
                         
@@ -695,10 +746,10 @@ void DoRayTracing(
 	                    	shadowRayPaylod // Payload
 	                    );
 
-                        float sampleContribution = 1.0;
+                        float sampleContribution = 0.0;
                         if(shadowRayPaylod.m_vHiTt <= 0)
                         {
-                            sampleContribution = 0.0;
+                            sampleContribution = 1.0;
                         }
 
                         lightSample.m_radianceOverPdf *= sampleContribution;
@@ -751,15 +802,28 @@ void LightMapRayTracingRayGen()
     }
 
     SRandomSequence randomSequence;
-    randomSequence.m_randomSeed = rayIndex.y * m_nAtlasSize.x + rayIndex.x;
-    randomSequence.m_nSampleIndex = 0;
+    randomSequence.m_randomSeed = 0;
+    randomSequence.m_nSampleIndex = StrongIntegerHash(rayIndex.y * m_nAtlasSize.x + rayIndex.x);
 
     float3 radianceValue = 0; // unused currently
 
     float3 directionalLightRadianceValue = 0;
     float3 directionalLightRadianceDirection = 0;
     
-    DoRayTracing(worldPosition,worldFaceNormal,randomSequence,bIsValidSample,directionalLightRadianceValue,directionalLightRadianceDirection);
+ #if RT_DEBUG_OUTPUT
+    float4 rtDebugOutput = 0.0;
+#endif
+
+    DoRayTracing(
+#if RT_DEBUG_OUTPUT
+        rtDebugOutput,
+#endif
+        worldPosition,
+        worldFaceNormal,
+        randomSequence,
+        bIsValidSample,
+        directionalLightRadianceValue,
+        directionalLightRadianceDirection);
     
     if (any(isnan(radianceValue)) || any(radianceValue < 0) || any(isinf(radianceValue)))
 	{
@@ -790,9 +854,14 @@ void LightMapRayTracingRayGen()
         const half LogBlackPoint = 0.01858136;
         encodedIrradianceAndSubLuma1[rayIndex] = float4(
             sqrt(max(irradianceAndSampleCount.rgb, float3(0.00001, 0.00001, 0.00001))),
-            log2( 1 + LogBlackPoint ) - (swizzedSH.w / 255 - 0.5 / 255));
+            //log2( 1 + LogBlackPoint ) - (swizzedSH.w / 255 - 0.5 / 255)
+            1.0 // currently use 128 bit light map for testing 
+            );
     }
 
+#if RT_DEBUG_OUTPUT
+        encodedIrradianceAndSubLuma1[rayIndex] = rtDebugOutput;
+#endif
 }
 
 
@@ -812,7 +881,7 @@ void ShadowClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTraci
 [shader("miss")]
 void RayMiassMain(inout SMaterialClosestHitPayload payload)
 {
-    payload.m_vHiTt = -1.0;
+    payload.m_vHiTt = -1.0; //test
 }
 #endif
 
@@ -824,15 +893,18 @@ struct SVisualizeGeometryApp2VS
 {
 	float3 posistion    : TEXCOORD0;
 	float2 lightmapuv   : TEXCOORD1;
+    float3 normal       : TEXCOORD2;
 };
 
 struct SVisualizeGeometryVS2PS
 {
   float4 position : SV_POSITION;
   float2 lightMapUV :TEXCOORD0;
+  float3 normal : TEXCOORD1;
 };
 
-Texture2D<float4> visLightMapResult: register(t0);
+Texture2D<float4> visencodedIrradianceAndSubLuma1: register(t0);
+Texture2D<float4> visshDirectionalityAndSubLuma2: register(t1);
 
 cbuffer CVisualizeGeomConstantBuffer : register(b0)
 {
@@ -858,13 +930,25 @@ SVisualizeGeometryVS2PS VisualizeGIResultVS(SVisualizeGeometryApp2VS IN )
     vs2PS.lightMapUV = IN.lightmapuv * vis_lightMapScaleAndBias.xy + vis_lightMapScaleAndBias.zw;
     float4 worldPosition = mul(vis_worldTM, float4(IN.posistion,1.0));
     vs2PS.position = mul(vis_vpMat, worldPosition);
+    vs2PS.normal = IN.normal; // vis_worldTM dont have the rotation part in this example, just ouput to the pixel shader
     return vs2PS;
 }
 
 SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
 {
     SVisualizeGIResult output;
-    float4 result = visLightMapResult.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
-    output.giResult = float4(result.x, IN.lightMapUV, 1.0);
+
+    float4 lightmap0 = visencodedIrradianceAndSubLuma1.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
+    float4 lightmap1 = visshDirectionalityAndSubLuma2.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
+    lightmap1 = lightmap1;
+
+    float3 irradiance = lightmap0.rgb * lightmap0.rgb;
+    float luma = lightmap1.w;
+
+    float3 wordlNormal = IN.normal;
+    float4 SH = lightmap1.xyzw;
+    float Directionality = dot(SH,float4(wordlNormal.yzx,1.0));
+
+    output.giResult = float4(irradiance * luma * Directionality  + float3(IN.lightMapUV.xy , IN.lightMapUV.x + IN.lightMapUV.y) * 0.05f /*test code*/, 1.0);
     return output;
 }
