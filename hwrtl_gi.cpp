@@ -25,6 +25,7 @@ SOFTWARE.
 // DOCUMENTATION
 // TODO:
 //   1. light map gbuffer generation: jitter result
+//   2. normal inverse transpose matrix
 //
 
 #include "hwrtl_gi.h"
@@ -110,9 +111,9 @@ namespace gi
 {
 	struct SGIMesh
 	{
-		std::shared_ptr<CBuffer> m_hPositionBuffer;
-		std::shared_ptr<CBuffer> m_hLightMapUVBuffer;
-		std::shared_ptr<CBuffer> m_hNormalBuffer; //unused
+		std::shared_ptr<CBuffer> m_positionVB;
+		std::shared_ptr<CBuffer> m_lightMapUVVB;
+		std::shared_ptr<CBuffer> m_normalVB;
 		std::shared_ptr<CBuffer> m_hConstantBuffer;
         
         std::shared_ptr<SGpuBlasData>m_pGpuMeshData;
@@ -165,7 +166,8 @@ namespace gi
     {
         uint32_t m_nRtSceneLightCount;
         Vec2i m_nAtlasSize;
-        float m_rtGlobalCbPadding[61];
+        uint32_t m_sampleIndex;
+        float m_rtGlobalCbPadding[60];
     };
     static_assert(sizeof(SRtGlobalConstantBuffer) == 256, "sizeof(SRtGlobalConstantBuffer) == 256");
 
@@ -296,9 +298,9 @@ namespace gi
         {
             const SBakeMeshDesc& bakeMeshDesc = bakeMeshDescs[index];
             SGIMesh giMesh;
-            giMesh.m_hPositionBuffer = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pPositionData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
-            giMesh.m_hLightMapUVBuffer = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pLightMapUVData, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB);
-            giMesh.m_hNormalBuffer = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pNormalData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
+            giMesh.m_positionVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pPositionData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
+            giMesh.m_lightMapUVVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pLightMapUVData, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB);
+            giMesh.m_normalVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pNormalData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
 
             giMesh.m_nVertexCount = bakeMeshDesc.m_nVertexCount;
             giMesh.m_nLightMapSize = bakeMeshDesc.m_nLightMapSize;
@@ -306,7 +308,7 @@ namespace gi
             giMesh.m_pGpuMeshData = std::make_shared<SGpuBlasData>();
 
             giMesh.m_pGpuMeshData->m_nVertexCount = giMesh.m_nVertexCount;
-            giMesh.m_pGpuMeshData->m_pVertexBuffer = giMesh.m_hPositionBuffer;
+            giMesh.m_pGpuMeshData->m_pVertexBuffer = giMesh.m_positionVB;
 
             std::vector<SMeshInstanceInfo> instanceInfos;
             instanceInfos.push_back(giMesh.m_meshInstanceInfo);
@@ -391,8 +393,8 @@ namespace gi
                 SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
 
                 std::vector<std::shared_ptr<CBuffer>> vertexBuffers;
-                vertexBuffers.push_back(giMesh.m_hPositionBuffer);
-                vertexBuffers.push_back(giMesh.m_hLightMapUVBuffer);
+                vertexBuffers.push_back(giMesh.m_positionVB);
+                vertexBuffers.push_back(giMesh.m_lightMapUVVB);
 
                 CGIBaker::GetGraphicsContext()->SetConstantBuffer(giMesh.m_hConstantBuffer, 0);
                 CGIBaker::GetGraphicsContext()->SetVertexBuffers(vertexBuffers);
@@ -548,9 +550,9 @@ namespace gi
                 SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
                 CGIBaker::GetGraphicsContext()->SetConstantBuffer(giMesh.m_hConstantBuffer, 0);
                 std::vector<std::shared_ptr<CBuffer>>vertexBuffers;
-                vertexBuffers.push_back(giMesh.m_hPositionBuffer);
-                vertexBuffers.push_back(giMesh.m_hLightMapUVBuffer);
-                vertexBuffers.push_back(giMesh.m_hNormalBuffer);
+                vertexBuffers.push_back(giMesh.m_positionVB);
+                vertexBuffers.push_back(giMesh.m_lightMapUVVB);
+                vertexBuffers.push_back(giMesh.m_normalVB);
                 CGIBaker::GetGraphicsContext()->SetVertexBuffers(vertexBuffers);
                 CGIBaker::GetGraphicsContext()->DrawInstanced(giMesh.m_nVertexCount, 1, 0, 0);
             }

@@ -48,6 +48,94 @@ namespace gi
 		bool m_bAddVisualizePass = false;
 	};
 
+	// must math the shading model id define in the hlsl shader
+	enum class EShadingModelID : uint32_t
+	{
+		E_DEFAULT_LIT = (1 << 1),
+	};
+
+	class CMaterialProperty
+	{
+	public:
+		inline bool IsValid()
+		{
+			return m_isValid;
+		}
+
+		inline bool IsUseTexture()
+		{
+			return m_bUseTexture;
+		}
+	protected:
+		bool m_isValid = false;
+		bool m_bUseTexture = false;
+	};
+
+	class CMaterialBaseColorProperty : public CMaterialProperty
+	{
+	public:
+		inline void SetBaseColorTexture(std::shared_ptr<CTexture2D>baseColorTexture)
+		{
+			m_baseColorTex = baseColorTexture;
+			m_bUseTexture = true;
+			m_isValid = true;
+		}
+
+		inline void SetDefaultValue(Vec3 defaultValue)
+		{
+			m_baseColorDefaultValue = defaultValue;
+			m_isValid = true;
+		}
+
+	private:
+		std::shared_ptr<CTexture2D> m_baseColorTex;
+		Vec3 m_baseColorDefaultValue;
+	};
+
+	class CMaterialRoughnessProperty : public CMaterialProperty
+	{
+	public:
+		inline void SetRoughnessTexture(std::shared_ptr<CTexture2D>roughnessTexture, uint32_t roughnessChannelInTex)
+		{
+			m_roughnessTexture = roughnessTexture;
+			roughnessChannel = roughnessChannelInTex;
+			m_bUseTexture = true;
+			m_isValid = true;
+		}
+
+		inline void SetDefaultValue(float defaultValue)
+		{
+			m_roughnessDefaultValue = defaultValue;
+			m_isValid = true;
+		}
+	private:
+		uint32_t roughnessChannel;
+		std::shared_ptr<CTexture2D> m_roughnessTexture;
+		float m_roughnessDefaultValue;
+	};
+
+	class CMaterialMetallicProperty : public CMaterialProperty
+	{
+	public:
+		inline void SetMetallicTexture(std::shared_ptr<CTexture2D>metallicTexture, uint32_t metallicChannelInTex)
+		{
+			m_metallicTexture = metallicTexture;
+			metallicChannel = metallicChannelInTex;
+			m_bUseTexture = true;
+			m_isValid = true;
+		}
+
+		inline void SetDefaultValue(float defaultValue)
+		{
+			m_metallicDefaultValue = defaultValue;
+			m_isValid = true;
+		}
+	private:
+		uint32_t metallicChannel;
+		std::shared_ptr<CTexture2D> m_metallicTexture;
+		float m_metallicDefaultValue;
+	};
+
 	struct SBakeMeshDesc
 	{
 		const Vec3* m_pPositionData = nullptr;
@@ -56,6 +144,11 @@ namespace gi
 
 		uint32_t m_nVertexCount = 0;
 		Vec2i m_nLightMapSize;
+
+		CMaterialBaseColorProperty m_materialBaseColorProperty;
+		CMaterialRoughnessProperty m_materialRoughnessProperty;
+		CMaterialRoughnessProperty m_materialMetallicProperty;
+		EShadingModelID m_shadingModelID;
 
 		SMeshInstanceInfo m_meshInstanceInfo;
 	};
