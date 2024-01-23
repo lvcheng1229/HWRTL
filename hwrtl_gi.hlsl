@@ -109,7 +109,6 @@ SLightMapGBufferOutput LightMapGBufferGenPS(SGeometryVS2PS IN)
 
     float3 faceNormal = normalize(cross(ddx(IN.m_worldPosition.xyz), ddy(IN.m_worldPosition.xyz)));
     
-    //
     //float3 deltaPosition = max(abs(ddx(IN.m_worldPosition)), abs(ddy(IN.m_worldPosition)));
     //float texelSize = max(deltaPosition.x, max(deltaPosition.y, deltaPosition.z));
     //texelSize *= sqrt(2.0); 
@@ -158,6 +157,43 @@ struct SRayTracingLight
     float3 m_rtLightpadding;
 };
 
+struct SMaterialGpuData
+{   
+    // 0 bytes
+    uint m_useTextureUV;
+    uint m_textureUVVBIndex;
+    uint m_positionVBIndex;
+    uint m_ibIndex;
+
+    // 14 bytes
+    // base color
+    uint m_useBaseColorTex;
+    float3 m_defaultBaseColorValue;
+    uint m_baseColorTexIndex;
+
+    // 36 bytes
+    // roughness
+    uint m_useRoughnessTex;
+    float m_defaultRoughnessValue;
+    uint m_roughnessChannelIndex;
+    uint m_roughnessTexIndex;
+
+    // 52 bytes
+    // metallic
+    uint m_useMetallicTex;
+    float m_metallicDefaultValue;
+    uint m_metallicChannelIndex;
+    uint m_metallicTexIndex;
+
+    // 68 bytes
+    // world position and world normal
+    uint m_lightMapUVVBIndex;
+    float4 m_lightMapScaleAndBias;
+    uint m_gBufferTexIndex;
+
+    uint m_shadingModelID
+};  // 96 bytes
+
 cbuffer CRtGlobalConstantBuffer : register(b0)
 {
     uint m_nRtSceneLightCount;
@@ -170,6 +206,7 @@ RaytracingAccelerationStructure rtScene : register(t0);
 Texture2D<float4> rtWorldPosition : register(t1);
 Texture2D<float4> rtWorldNormal : register(t2);
 StructuredBuffer<SRayTracingLight> rtSceneLights : register(t3);
+StructuredBuffer<SMaterialGpuData> rtAtlasInstanceMaterialData : register(t4);
 
 RWTexture2D<float4> encodedIrradianceAndSubLuma1 : register(u0);
 RWTexture2D<float4> shDirectionalityAndSubLuma2 : register(u1);
@@ -1301,11 +1338,111 @@ void LightMapRayTracingRayGen()
 #endif
 }
 
-
-
 [shader("closesthit")]
 void MaterialClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTracingIntersectionAttributes attributes)
 {
+    const float3 barycentrics = float3(1.0 - attributes.x - attributes.y, attributes.x, attributes.y);
+    StructuredBuffer<uint3> indexBuffer = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_ibIndex)]
+    uint3 primitiveIndices = indexBuffer[PrimitiveIndex()];
+
+    SMaterialGpuData instanceMaterialData = rtAtlasInstanceMaterialData[InstanceIndex()];
+
+    //texture uv
+    float2 textureUV = float2(0,0);
+    if(instanceMaterialData.m_useTextureUV)
+    {
+        StructuredBuffer<float2> textureUVBuffer = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_textureUVVBIndex)];
+        float2 textureUV0 = textureUVBuffer[primitiveIndices.x];
+        float2 textureUV1 = textureUVBuffer[primitiveIndices.y];
+        float2 textureUV2 = textureUVBuffer[primitiveIndices.z];
+        textureUV = textureUV0 * barycentrics.x + textureUV1 * barycentrics.y + textureUV2 * barycentrics.z;
+    }
+
+    // base color
+    float3 baseColor = float3(1.0,1.0,1.0);
+    if(instanceMaterialData.m_useBaseColorTex)
+    {
+        Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_baseColorTexIndex)];
+        baseColor = baseColorTexture.SampleLevel(gSamLinearWarp, textureUV, 0.0);
+    }
+    else
+    {
+        baseColor = instanceMaterialData.m_defaultBaseColorValue;
+    }
+
+    // metallic
+    float metallic = 0.0;
+    if(instanceMaterialData.m_useMetallicTex)
+    {
+        Texture2D<float4> metallicTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_metallicTexIndex)];
+        float4 metallicRGBA = metallicTexture.SampleLevel(gSamLinearWarp, textureUV, 0.0);
+        float rgbaArray[4]; 
+        rgbaArray[0] = metallicRGBA.x;
+        rgbaArray[1] = metallicRGBA.y;
+        rgbaArray[2] = metallicRGBA.z;
+        rgbaArray[3] = metallicRGBA.w;
+        metallic = rgbaArray[instanceMaterialData.m_metallicChannelIndex]
+    }
+    else
+    {
+        metallic = instanceMaterialData.m_metallicDefaultValue;
+    }
+
+    // TODO
+    float3 specularColor = baseColor * metallic;
+    float3 diffuseColor = baseColor - specularColor;
+
+    // base/diff/spec color
+    payload.m_baseColor = baseColor;
+    payload.m_specColor = specularColor;
+    payload.m_diffuseColor = diffuseColor;
+
+    // roughness
+    float roughness = 1.0f;
+    if(instanceMaterialData.m_useRoughnessTex)
+    {
+        Texture2D<float4> roughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_roughnessTexIndex)];
+        float4 roughnessRGBA = roughnessTexture.SampleLevel(gSamLinearWarp, textureUV, 0.0);
+        float rgbaArray[4]; 
+        rgbaArray[0] = roughnessRGBA.x;
+        rgbaArray[1] = roughnessRGBA.y;
+        rgbaArray[2] = roughnessRGBA.z;
+        rgbaArray[3] = roughnessRGBA.w;
+        roughness = rgbaArray[instanceMaterialData.m_roughnessChannelIndex]
+    }
+    else
+    {
+        roughness = instanceMaterialData.m_defaultRoughnessValue;
+    }
+
+    // todo: calculate world position and world normal form vertex buffer rather than gbuffer
+    // world normal and world position
+    StructuredBuffer<float2> lightMapUVBuffer = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_lightMapUVVBIndex)];
+    float2 lightMapUV0 = lightMapUVBuffer[primitiveIndices.x];
+    float2 lightMapUV1 = lightMapUVBuffer[primitiveIndices.y];
+    float2 lightMapUV2 = lightMapUVBuffer[primitiveIndices.z];
+    float2 lightMapUV = lightMapUV0 * barycentrics.x + lightMapUV1 * barycentrics.y + lightMapUV2 * barycentrics.z;
+
+    Texture2D<float4> worldPositionTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_gBufferTexIndex * 2)];
+    Texture2D<float4> worldNormalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_gBufferTexIndex * 2 + 1)];
+    
+    float2 atlasUV = lightMapUV * instanceMaterialData.m_lightMapScaleAndBias + instanceMaterialData.m_lightMapScaleAndBias;
+
+    float3 worldPosition = worldPositionTexture.SampleLevel(gSamPointWarp, atlasUV, 0.0);
+    float3 worldNormal = worldNormalTexture.SampleLevel(gSamPointWarp, atlasUV, 0.0);
+    payload.m_worldPosition = worldPosition;
+    payload.m_worldFaceNormal = worldNormal;
+
+    // shading model id
+    payload.m_shadingModelID = instanceMaterialData.m_shadingModelID;
+
+    // isFronFace
+    if (HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE)
+    {
+        payload.m_eFlag = RT_PAYLOAD_FLAG_FRONT_FACE;
+    }
+
+    //hit t
     payload.m_vHiTt = RayTCurrent();;
 }
 
@@ -1318,7 +1455,7 @@ void ShadowClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTraci
 [shader("miss")]
 void RayMiassMain(inout SMaterialClosestHitPayload payload)
 {
-    payload.m_vHiTt = -1.0; //test
+    payload.m_vHiTt = -1.0;
 }
 #endif
 

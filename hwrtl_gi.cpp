@@ -113,9 +113,13 @@ namespace gi
 	{
 		std::shared_ptr<CBuffer> m_positionVB;
 		std::shared_ptr<CBuffer> m_lightMapUVVB;
-		std::shared_ptr<CBuffer> m_normalVB;
+		std::shared_ptr<CBuffer> m_indexBuffer;
+
 		std::shared_ptr<CBuffer> m_hConstantBuffer;
         
+		std::shared_ptr<CBuffer> m_normalVB;
+		std::shared_ptr<CBuffer> m_textureUVVB;
+
         std::shared_ptr<SGpuBlasData>m_pGpuMeshData;
 
         Vec2i m_nLightMapSize;
@@ -123,8 +127,10 @@ namespace gi
         Vec4 m_lightMapScaleAndBias;
 
         uint32_t m_nVertexCount = 0;
-        
+
         int m_nAtlasIndex;
+
+        SMaterialProperties m_mltProps;
 
         SMeshInstanceInfo m_meshInstanceInfo;
 	};
@@ -170,6 +176,49 @@ namespace gi
         float m_rtGlobalCbPadding[60];
     };
     static_assert(sizeof(SRtGlobalConstantBuffer) == 256, "sizeof(SRtGlobalConstantBuffer) == 256");
+
+    struct SGpuMaterial
+    {
+        // 0 bytes
+        uint32_t m_useTextureUV;
+        uint32_t m_textureUVVBIndex;
+        uint32_t m_positionVBIndex;
+        uint32_t m_ibIndex;
+
+        // 16 bytes
+        // base color
+        uint32_t m_useBaseColorTexture;
+        Vec3 m_defaultBaseColorValue;
+        uint32_t m_baseColorBindlessIndex;
+
+        // 36 bytes
+        //roughness
+        uint32_t m_useRoughnessTexture;
+        float m_roughnessDefaultValue;
+        uint32_t m_roughnessChannelIndex;
+        uint32_t m_roughnessBindlessIndex;
+
+        // 52 bytes
+        //metallic
+        uint32_t m_useMetallicTexture;
+        float m_metallicDefaultValue;
+        uint32_t m_metallicChannelIndex;
+        uint32_t m_metallicBindlessIndex;
+
+        //68 bytes
+        // world position and world normal
+        uint32_t m_lightMapUVVBIndex;
+        Vec4 m_lightMapScaleAndBias;
+        uint32_t m_gBufferTexIndex;
+
+        uint32_t m_shadingModelID;
+    };  // 96 bytes
+
+
+    class CHWRTLLightMapDenoiser
+    {
+    public:
+    };
 
 	class CGIBaker
 	{
@@ -292,16 +341,51 @@ namespace gi
         AddBakeMeshsAndCreateVB(bakeMeshDescs);
     }
 
+    static void ValidateMeshDesc(const SBakeMeshDesc& bakeMeshDesc)
+    {
+        assert(bakeMeshDesc.m_pPositionData != nullptr);
+        assert(bakeMeshDesc.m_pLightMapUVData != nullptr);
+        assert(bakeMeshDesc.m_pIndexData != nullptr);
+
+        bool bUseTexture =
+            bakeMeshDesc.m_mltProp.m_materialBaseColorProperty.IsUseTexture() ||
+            bakeMeshDesc.m_mltProp.m_materialRoughnessProperty.IsUseTexture() ||
+            bakeMeshDesc.m_mltProp.m_materialMetallicProperty.IsUseTexture();
+
+        if (bUseTexture)
+        {
+            assert((bakeMeshDesc.m_pTextureUV != nullptr) && "you muse set the texture uv data if use texture as ray tracing material input");
+        }
+
+        if (pGiBaker->m_bakeConfig.m_bAddVisualizePass)
+        {
+            assert((bakeMeshDesc.m_pNormalData != nullptr) && "gi baker visualize pass need normal vertex buffer");
+        }
+    }
+
     void hwrtl::gi::AddBakeMeshsAndCreateVB(const std::vector<SBakeMeshDesc>& bakeMeshDescs)
     {
         for (uint32_t index = 0; index < bakeMeshDescs.size(); index++)
         {
             const SBakeMeshDesc& bakeMeshDesc = bakeMeshDescs[index];
             SGIMesh giMesh;
+
+            ValidateMeshDesc(bakeMeshDesc);
+
             giMesh.m_positionVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pPositionData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
             giMesh.m_lightMapUVVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pLightMapUVData, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB);
-            giMesh.m_normalVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pNormalData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
+            giMesh.m_indexBuffer = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pIndexData, bakeMeshDesc.m_nIndexCount * sizeof(Vec3i), sizeof(Vec3i), EBufferUsage::USAGE_IB);
 
+            if (bakeMeshDesc.m_pTextureUV)
+            {
+                giMesh.m_textureUVVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pTextureUV, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB);
+            }
+            
+            if (bakeMeshDesc.m_pNormalData)
+            {
+                giMesh.m_normalVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pNormalData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
+            }
+           
             giMesh.m_nVertexCount = bakeMeshDesc.m_nVertexCount;
             giMesh.m_nLightMapSize = bakeMeshDesc.m_nLightMapSize;
             giMesh.m_meshInstanceInfo = bakeMeshDesc.m_meshInstanceInfo;
@@ -309,6 +393,8 @@ namespace gi
 
             giMesh.m_pGpuMeshData->m_nVertexCount = giMesh.m_nVertexCount;
             giMesh.m_pGpuMeshData->m_pVertexBuffer = giMesh.m_positionVB;
+
+            giMesh.m_mltProps = bakeMeshDesc.m_mltProp;
 
             std::vector<SMeshInstanceInfo> instanceInfos;
             instanceInfos.push_back(giMesh.m_meshInstanceInfo);
@@ -340,11 +426,10 @@ namespace gi
             {
                 SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];
 
-                struct SGbufferGenCB
+                struct SGbufferGenPerGeoCB
                 {
                     Matrix44 m_worldTM;
                     Vec4 lightMapScaleAndBias;
-
                     float padding[44];
                 }gBufferCbData;
 
@@ -358,14 +443,14 @@ namespace gi
                     }
                 }
 
-                for (uint32_t i = 0; i < 44; i++)
+                for (uint32_t i = 0; i < 40; i++)
                 {
                     gBufferCbData.padding[i] = 1.0;
                 }
 
                 gBufferCbData.lightMapScaleAndBias = giMesh.m_lightMapScaleAndBias;
 
-                giMesh.m_hConstantBuffer = CGIBaker::GetDeviceCommand()->CreateBuffer(&gBufferCbData, sizeof(SGbufferGenCB), sizeof(SGbufferGenCB), EBufferUsage::USAGE_CB);
+                giMesh.m_hConstantBuffer = CGIBaker::GetDeviceCommand()->CreateBuffer(&gBufferCbData, sizeof(SGbufferGenPerGeoCB), sizeof(SGbufferGenPerGeoCB), EBufferUsage::USAGE_CB);
             }
         }
 	}
@@ -398,6 +483,7 @@ namespace gi
 
                 CGIBaker::GetGraphicsContext()->SetConstantBuffer(giMesh.m_hConstantBuffer, 0);
                 CGIBaker::GetGraphicsContext()->SetVertexBuffers(vertexBuffers);
+
                 CGIBaker::GetGraphicsContext()->DrawInstanced(giMesh.m_nVertexCount, 1, 0, 0);
             }
         }

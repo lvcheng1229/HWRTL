@@ -301,6 +301,7 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	public:
 		CTexture2D() {}
 		virtual ~CTexture2D() {}
+		virtual uint32_t GetBindlessIndex() = 0;
 	};
 
 	class CBuffer

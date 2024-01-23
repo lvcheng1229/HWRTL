@@ -185,6 +185,11 @@ namespace hwrtl
             // TODO: Release Desc In Desc Manager
         }
 
+        uint32_t GetBindlessIndex() override
+        {
+            return 0;
+        }
+
         CDx12Resouce m_dxResource;
 
         CDx12View m_uav;
