@@ -141,6 +141,7 @@ SLightMapGBufferOutput LightMapGBufferGenPS(SGeometryVS2PS IN)
 #define RT_SHADER_NUM 2
 
 static const uint maxBounces = 32;
+static const uint debugSample = 0;
 
 struct SRayTracingLight
 {
@@ -157,42 +158,16 @@ struct SRayTracingLight
     float3 m_rtLightpadding;
 };
 
-struct SMaterialGpuData
+struct SMeshInstanceGpuData
 {   
-    // 0 bytes
-    uint m_useTextureUV;
-    uint m_textureUVVBIndex;
-    uint m_positionVBIndex;
-    uint m_ibIndex;
+    float4x4 m_worldTM;
+    uint ibStride;
+    uint ibIndex;
+    uint vbIndex;
+    uint unused;
+};
 
-    // 14 bytes
-    // base color
-    uint m_useBaseColorTex;
-    float3 m_defaultBaseColorValue;
-    uint m_baseColorTexIndex;
-
-    // 36 bytes
-    // roughness
-    uint m_useRoughnessTex;
-    float m_defaultRoughnessValue;
-    uint m_roughnessChannelIndex;
-    uint m_roughnessTexIndex;
-
-    // 52 bytes
-    // metallic
-    uint m_useMetallicTex;
-    float m_metallicDefaultValue;
-    uint m_metallicChannelIndex;
-    uint m_metallicTexIndex;
-
-    // 68 bytes
-    // world position and world normal
-    uint m_lightMapUVVBIndex;
-    float4 m_lightMapScaleAndBias;
-    uint m_gBufferTexIndex;
-
-    uint m_shadingModelID
-};  // 96 bytes
+ByteAddressBuffer bindlessByteAddressBuffer[] : register(t0, space1);
 
 cbuffer CRtGlobalConstantBuffer : register(b0)
 {
@@ -206,7 +181,7 @@ RaytracingAccelerationStructure rtScene : register(t0);
 Texture2D<float4> rtWorldPosition : register(t1);
 Texture2D<float4> rtWorldNormal : register(t2);
 StructuredBuffer<SRayTracingLight> rtSceneLights : register(t3);
-StructuredBuffer<SMaterialGpuData> rtAtlasInstanceMaterialData : register(t4);
+StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t4);
 
 RWTexture2D<float4> encodedIrradianceAndSubLuma1 : register(u0);
 RWTexture2D<float4> shDirectionalityAndSubLuma2 : register(u1);
@@ -228,7 +203,6 @@ struct SMaterialClosestHitPayload
     uint m_eFlag; //e.g. front face flag
 
     // eval material
-    uint m_shadingModelID;
     float m_roughness;
     float3 m_baseColor;
     float3 m_diffuseColor;
@@ -442,13 +416,6 @@ float4 UniformSampleConeRobust(float2 E, float SinThetaMax2)
 	return float4(L, PDF);
 }
 
-float2 UniformSampleDisk( float2 E )
-{
-	float Theta = 2 * PI * E.x;
-	float Radius = sqrt( E.y );
-	return Radius * float2( cos( Theta ), sin( Theta ) );
-}
-
 float4 CosineSampleHemisphere( float2 E )
 {
 	float Phi = 2 * PI * E.x;
@@ -463,69 +430,6 @@ float4 CosineSampleHemisphere( float2 E )
 	float PDF = CosTheta * (1.0 / PI);
 
 	return float4(H, PDF);
-}
-
-float4 ImportanceSampleGGX( float2 E, float a2 )
-{
-	float Phi = 2 * PI * E.x;
-	float CosTheta = sqrt( (1 - E.y) / ( 1 + (a2 - 1) * E.y ) );
-	float SinTheta = sqrt( 1 - CosTheta * CosTheta );
-
-	float3 H;
-	H.x = SinTheta * cos( Phi );
-	H.y = SinTheta * sin( Phi );
-	H.z = CosTheta;
-	
-	float d = ( CosTheta * a2 - CosTheta ) * CosTheta + 1;
-	float D = a2 / ( PI*d*d );
-	float PDF = D * CosTheta;
-
-	return float4( H, PDF );
-}
-
-float VisibleGGXPDF(float3 V, float3 H, float a2)
-{
-	float NoV = V.z;
-	float NoH = H.z;
-	float VoH = dot(V, H);
-
-	float d = (NoH * a2 - NoH) * NoH + 1;
-	float D = a2 / (PI*d*d);
-
-	float PDF = 2 * VoH * D / (NoV + sqrt(NoV * (NoV - NoV * a2) + a2));
-	return PDF;
-}
-
-// [ Heitz 2018, "Sampling the GGX Distribution of Visible Normals" ]
-// http://jcgt.org/published/0007/04/01/
-
-float4 ImportanceSampleVisibleGGX( float2 DiskE, float a2, float3 V )
-{
-	// NOTE: See below for anisotropic version that avoids this sqrt
-	float a = sqrt(a2);
-
-	// stretch
-	float3 Vh = normalize( float3( a * V.xy, V.z ) );
-
-	// Stable tangent basis based on V
-	// Tangent0 is orthogonal to N
-	float LenSq = Vh.x * Vh.x + Vh.y * Vh.y;
-	float3 Tangent0 = LenSq > 0 ? float3(-Vh.y, Vh.x, 0) * rsqrt(LenSq) : float3(1, 0, 0);
-	float3 Tangent1 = cross(Vh, Tangent0);
-
-	float2 p = DiskE;
-	float s = 0.5 + 0.5 * Vh.z;
-	p.y = (1 - s) * sqrt( 1 - p.x * p.x ) + s * p.y;
-
-	float3 H;
-	H  = p.x * Tangent0;
-	H += p.y * Tangent1;
-	H += sqrt( saturate( 1 - dot( p, p ) ) ) * Vh;
-
-	// unstretch
-	H = normalize( float3( a * H.xy, max(0.0, H.z) ) );
-
-	return float4(H, VisibleGGXPDF(V, H, a2));
 }
 
 float MISWeightRobust(float Pdf, float OtherPdf) 
@@ -649,29 +553,6 @@ SLightSample SampleLight(int nLightIndex,float2 vRandSample,float3 vWorldPos,flo
 
 /***************************************************************************
 *   LightMap Ray Tracing Pass:
-*       BRDF define
-***************************************************************************/
-float D_GGX( float a2, float NoH )
-{
-	float d = ( NoH * a2 - NoH ) * NoH + 1;	
-	return a2 / ( PI*d*d );
-}
-
-float Vis_SmithJoint(float a2, float NoV, float NoL) 
-{
-	float Vis_SmithV = NoL * sqrt(NoV * (NoV - NoV * a2) + a2);
-	float Vis_SmithL = NoV * sqrt(NoL * (NoL - NoL * a2) + a2);
-	return 0.5 * rcp(Vis_SmithV + Vis_SmithL);
-}
-
-float3 F_Schlick( float3 SpecularColor, float VoH )
-{
-	float Fc = Pow5( 1 - VoH );	
-	return saturate( 50.0 * SpecularColor.g ) * Fc + (1 - Fc) * SpecularColor;
-}
-
-/***************************************************************************
-*   LightMap Ray Tracing Pass:
 *       Eval Material Brdf etc
 ***************************************************************************/
 
@@ -681,89 +562,20 @@ struct SMaterialEval
     float m_pdf;
 };
 
-float CalcLobeSelectionProb(SMaterialClosestHitPayload payload)
-{
-	float3 diff = payload.m_diffuseColor;
-	float3 spec = payload.m_specColor;
-
-    float sumDiff = diff.x + diff.y + diff.z;
-    float sumSpec = spec.x + spec.y + spec.z;
-	return sumDiff / (sumDiff + sumSpec + 0.0001f);
-}
-
-SMaterialEval EvalDefaultLitMaterial(float3 incomingDirection, float3 outgoingDirection, SMaterialClosestHitPayload payload)
-{
-    SMaterialEval materialEval = (SMaterialEval)0;
-
-    const float3 m_wolrdV = -incomingDirection;
-    const float3 m_worldL = outgoingDirection;
-    const float3 m_worldN = payload.m_worldNormal;
-
-    float3x3 Basis = GetTangentBasis( m_worldN );
-
-    // world to local
-    const float3 V = mul(Basis, m_wolrdV);
-	const float3 L = mul(Basis, m_worldL);
-	const float3 H = normalize(V + L);
-
-    const float NoV = saturate(V.z);
-    const float NoL = saturate(L.z);
-    const float NoH = saturate(H.z);
-
-	const float VoH = saturate(dot(V, H));
-
-    float3 diffuseLobeWeight = payload.m_diffuseColor;
-    float diffuseLobePdf = NoL / PI;
-
-    //https://zhuanlan.zhihu.com/p/379681777
-    //https://zhuanlan.zhihu.com/p/632392281
-    // D * F * G * cos / (4 * NoL * NoV)
-    float roughness = max(payload.m_roughness,0.01);
-    float a2 = roughness * roughness;
-    float D = D_GGX(a2,NoH);
-    float G = Vis_SmithJoint(a2,NoV,NoL);
-    float3 F =  F_Schlick(payload.m_specColor, VoH);
-    float3 specularLobeWeight = D * F * G / (4 * NoL * NoV) * (NoL);
-    float specularLobePdf = D * (NoL);
-
-    float misWeight = specularLobePdf / (diffuseLobePdf + specularLobePdf);
-    
-    const float diffLobeProb = CalcLobeSelectionProb(payload);
-    float3 resultWeight = 
-            (specularLobeWeight * (1 - diffLobeProb)) * misWeight + 
-            (diffuseLobeWeight  * (diffLobeProb)    ) * (1- misWeight);
-    float resultPdf = diffuseLobePdf * diffLobeProb + specularLobePdf * (1- diffLobeProb);
-
-    materialEval.m_weight = resultWeight;
-    materialEval.m_pdf = resultPdf;
-    return materialEval;
-}
-
 SMaterialEval EvalLambertMaterial(float3 outgoingDirection,SMaterialClosestHitPayload payload)
 {
     SMaterialEval materialEval = (SMaterialEval)0;
     float3 N_World = payload.m_worldNormal;
 	float NoL = saturate(dot(N_World, outgoingDirection));
     
-    // weight = m_baseColor pdf = NoL / PI
     materialEval.m_weight = payload.m_baseColor;
     materialEval.m_pdf =  (NoL / PI);
     return materialEval;
 }
 
-SMaterialEval EvalMaterial(float3 incomingDirection, float3 outgoingDirection, SMaterialClosestHitPayload payload, bool bForceLambertMaterial)
+SMaterialEval EvalMaterial(float3 outgoingDirection, SMaterialClosestHitPayload payload)
 {
-    // eval lambert material for the first bounce
-    if(bForceLambertMaterial)
-    {
-        return EvalLambertMaterial(outgoingDirection,payload);
-    }
-
-    switch(payload.m_shadingModelID)
-    {
-        case SHADING_MODEL_DEFAULT_LIT: return EvalDefaultLitMaterial(incomingDirection,outgoingDirection,payload);
-        default:return EvalLambertMaterial(outgoingDirection,payload);
-    }
+    return EvalLambertMaterial(outgoingDirection,payload);
 }
 
 /***************************************************************************
@@ -790,88 +602,9 @@ SMaterialSample SampleLambertMaterial(SMaterialClosestHitPayload payload, float4
     return materialSample;
 }
 
-SMaterialSample SampleDefaultLitMaterial(float3 rayDirection,SMaterialClosestHitPayload payload, float4 randomSample)
+SMaterialSample SampleMaterial(SMaterialClosestHitPayload payload, float4 randomSample)
 {
-    SMaterialSample materialSample = (SMaterialSample)0;
-
-    float roughness = max(payload.m_roughness,0.01);
-    float a2 = roughness * roughness;
-
-    float3 worldNormal = payload.m_worldNormal;
-    float3 V = -rayDirection;
-
-    const float diffLobeProb = CalcLobeSelectionProb(payload);
-    float3x3 Basis = GetTangentBasis( worldNormal );
-
-    // world to local
-    V = mul(Basis,V);
-    
-    float3 L = 0, H = 0;
-
-    if (randomSample.x < diffLobeProb)
-	{
-		randomSample.x /= diffLobeProb;
-        float4 result = CosineSampleHemisphere(randomSample.xy);
-        L = result.xyz;
-		H = normalize(L + V);
-    }
-    else
-	{
-		randomSample.x -= diffLobeProb;
-		randomSample.x /= (1.0 - diffLobeProb);
-        //ImportanceSampleGGX
-        //ImportanceSampleVisibleGGX
-        H = ImportanceSampleVisibleGGX(UniformSampleDisk(randomSample.xy), a2, V).xyz;
-        L = reflect(-V, H);
-        if (L.z <= 0)
-        {
-            return materialSample;
-        }
-    }
-
-    const float NoV = saturate(V.z);
-    const float NoL = saturate(L.z);
-    const float NoH = saturate(H.z);
-
-	const float VoH = saturate(dot(V, H));
-
-    float3 diffuseLobeWeight = payload.m_diffuseColor;
-    float diffuseLobePdf = NoL / PI;
-
-    //https://zhuanlan.zhihu.com/p/379681777
-    //https://zhuanlan.zhihu.com/p/632392281
-    // D * F * G * cos / (4 * NoL * NoV)
-
-    float D = D_GGX(a2,NoH);
-    float G = Vis_SmithJoint(a2,NoV,NoL);
-    float3 F =  F_Schlick(payload.m_specColor, VoH);
-    float3 specularLobeWeight = D * F * G / (4 * NoL * NoV) * (NoL);
-    float specularLobePdf = D * (NoL);
-
-    float misWeight = specularLobePdf / (diffuseLobePdf + specularLobePdf);
-    float3 resultWeight = 
-            (specularLobeWeight * (1 - diffLobeProb)) * misWeight + 
-            (diffuseLobeWeight  * (diffLobeProb)    ) * (1- misWeight);
-    float resultPdf = diffuseLobePdf * diffLobeProb + specularLobePdf * (1- diffLobeProb);
-
-    materialSample.m_direction = normalize(mul(L, Basis)); // local to world
-    materialSample.m_weight = resultWeight;
-    materialSample.m_pdf = resultPdf;
-    return materialSample;
-}
-
-SMaterialSample SampleMaterial(float3 rayDirection, SMaterialClosestHitPayload payload, float4 randomSample, bool bForceLambertMaterial)
-{
-    if(bForceLambertMaterial)
-    {
-        return SampleLambertMaterial(payload,randomSample);
-    }
-
-    switch(payload.m_shadingModelID)
-    {
-        case SHADING_MODEL_DEFAULT_LIT: return SampleDefaultLitMaterial(rayDirection,payload,randomSample);
-        default:return SampleLambertMaterial(payload,randomSample);
-    }
+    return SampleLambertMaterial(payload,randomSample);
 }
 
 /***************************************************************************
@@ -1022,7 +755,36 @@ void DoRayTracing(
 	float3 pathThroughput = 1.0;
     float aLightPickingCdf[RT_MAX_SCENE_LIGHT];
 
-    for(int bounce = 0; bounce <= maxBounces; bounce++)
+    // render equation
+    // Lo = Le + Int Li * fr * cos * vis
+    
+    // unreal gpu light mass use simplified material: lambert material
+    // fr = albedo / pi = baseColor / pi
+    // Lo = Le + Int Li * (baseColor / pi) * NoL
+
+    //https://zhuanlan.zhihu.com/p/600466413
+    // multi important sampling
+    // fx = Li
+    // gx = fr * cos
+    // Lo = Int fx gx dx
+    // xf = light sample xg = material sample
+
+    // step1: Sample Light, Choose a [LIGHT] randomly
+    // f(xf) * g(xf) * w (xf) / pdf(xf)
+    // f(xf) / pdf(xf) = lightSample.radianceoverpdf
+    // g(xf) = (baseColor / Pi) * NoL = materialEval.weight(basecolor) * materialEval.pdf(NoL / Pi)
+    // w(xf) = pdf(xf) / ( pdf(xf) + pdf(xg) ) = mis(lightSample.m_pdf, materialEval.m_pdf)
+
+    // step2: Sample Material, Choose a [LIGHT DIRECTION] based on material randomly
+    // f(xg) * g(xg) * w (xg) / pdf(xg)
+    // f(xg) = lightTraceResult.m_radiance
+    // g(xg) = materialSample.weight = pathThroughput * materialSample.m_weight
+    // pdf(xg) = CosineSampleHemisphere
+    // pdf(xg) = lightPickPdf * lightTraceResult.m_pdf
+    // w(xg) = pdf(xg) / ( pdf(xf) + pdf(xg) ) = mis(materialSample.m_pdf,lightPickPdf * lightTraceResult.m_pdf)
+
+    
+    for(int bounce = 0; bounce <= 0; bounce++)
     {
         const bool bIsCameraRay = bounce == 0;
         const bool bIsLastBounce = bounce == maxBounces;
@@ -1034,7 +796,6 @@ void DoRayTracing(
             rtRaylod.m_worldNormal = faceNormal;
             rtRaylod.m_vHiTt = 1.0f;
             rtRaylod.m_eFlag |= RT_PAYLOAD_FLAG_FRONT_FACE;
-            rtRaylod.m_shadingModelID = SHADING_MODEL_DEFAULT_LIT;
             rtRaylod.m_roughness = 1.0f;
             rtRaylod.m_baseColor = float3(1,1,1);
             rtRaylod.m_diffuseColor = float3(1,1,1);
@@ -1061,16 +822,18 @@ void DoRayTracing(
 
         // step1 : Sample Light, Choose a [LIGHT] randomly
         float vLightPickingCdfPreSum = 0.0;
+        float3 worldPosition = rtRaylod.m_worldPosition;
+        float3 worldNormal = rtRaylod.m_worldNormal;
+
+        for(uint index = 0; index < m_nRtSceneLightCount; index++)
         {
-            float3 worldPosition = rtRaylod.m_worldPosition;
-            float3 worldNormal = rtRaylod.m_worldNormal;
+            vLightPickingCdfPreSum += EstimateLight(index,worldPosition,worldNormal);
+            aLightPickingCdf[index] = vLightPickingCdfPreSum;
+        }
 
-            for(uint index = 0; index < m_nRtSceneLightCount; index++)
-            {
-                vLightPickingCdfPreSum += EstimateLight(index,worldPosition,worldNormal);
-                aLightPickingCdf[index] = vLightPickingCdfPreSum;
-            }
-
+        // step1: Sample Light, Choose a [LIGHT] randomly
+        if(debugsample == 1)
+        {
             if (vLightPickingCdfPreSum > 0)
             {
                 int nSelectedLightIndex = 0;
@@ -1097,21 +860,9 @@ void DoRayTracing(
                         shadowRay.TMin = 0.0f;
                         shadowRay.Direction = lightSample.m_direction;
                         shadowRay.TMax = lightSample.m_distance;
-                        
-                        // TODO: Apply A Bias, see codm?
-                        shadowRay.Origin += abs(worldPosition) * 0.001f * worldNormal;
+                        shadowRay.Origin += abs(worldPosition) * 0.001f * worldNormal; // todo : betther bias calculation
 
-                        //TODO:
-                        TraceRay(
-	                    	rtScene, // AccelerationStructure
-	                    	RAY_FLAG_FORCE_OPAQUE,
-	                    	RAY_TRACING_MASK_OPAQUE, 
-	                    	RT_SHADOW_SHADER_INDEX, // RayContributionToHitGroupIndex
-	                    	1, // MultiplierForGeometryContributionToShaderIndex
-	                    	0, // MissShaderIndex
-	                    	shadowRay, // RayDesc
-	                    	shadowRayPaylod // Payload
-	                    );
+                        TraceRay(rtScene, RAY_FLAG_FORCE_OPAQUE, RAY_TRACING_MASK_OPAQUE, RT_SHADOW_SHADER_INDEX, 1,0, shadowRay, shadowRayPaylod);
 
                         float sampleContribution = 0.0;
                         if(shadowRayPaylod.m_vHiTt <= 0)
@@ -1124,9 +875,9 @@ void DoRayTracing(
 
                     if (any(lightSample.m_radianceOverPdf > 0))
                     {   
-                        SMaterialEval materialEval = EvalMaterial(ray.Direction, lightSample.m_direction, rtRaylod,bounce == 0);
+                        SMaterialEval materialEval = EvalMaterial(lightSample.m_direction,rtRaylod);
 
-                        //materialEval.m_weight = fr * cos
+                        // lambert Li * rho(basecolor) * NoL / PI;
                         float3 lightContrib = pathThroughput * lightSample.m_radianceOverPdf * materialEval.m_weight * materialEval.m_pdf;
                         
                         //mis weight
@@ -1150,89 +901,92 @@ void DoRayTracing(
             }
         }
 
-        //step2 : Sample Material, Choose a [LIGHT DIRECTION] based on material randomly
-        SMaterialSample materialSample = SampleMaterial(ray.Direction,rtRaylod,randomSample,bounce == 0);
-        if(materialSample.m_pdf < 0.0 || asuint(materialSample.m_pdf) > 0x7F800000)
+        // step2: Sample Material, Choose a [LIGHT DIRECTION] based on material randomly
+        if(debugSample == 2)
         {
-            break;
-        }
-
-        float3 nextPathThroughput = pathThroughput * materialSample.m_weight;
-        if(!any(nextPathThroughput > 0))
-        {
-            break;
-        }
-
-        float maxNextPathThroughput = max(max(nextPathThroughput.x, nextPathThroughput.y),nextPathThroughput.z);
-        float maxPathThroughput = max(max(pathThroughput.x, pathThroughput.y),pathThroughput.z);
-
-        float continuationProbability = sqrt(saturate(maxNextPathThroughput / maxPathThroughput));
-        if(continuationProbability < 1 && bounce != 0)
-        {
-            float russianRouletteRand = randomSample.w;
-			if (russianRouletteRand >= continuationProbability)
-			{
-				break;
-			}
-			pathThroughput = nextPathThroughput / continuationProbability;
-        }
-        else
-        {
-            pathThroughput = nextPathThroughput;
-        }
-
-        ray.Origin = rtRaylod.m_worldPosition;
-        ray.Direction = normalize(materialSample.m_direction);
-        ray.TMin = 0.0f;
-        ray.TMax = POSITIVE_INFINITY;
-
-        ray.Origin += abs(rtRaylod.m_worldPosition) * 0.001f * rtRaylod.m_worldNormal;
-
-        if(bounce == 0)
-        {
-            radianceDirection = ray.Direction;
-        }
-
-        for(uint index = 0; index < m_nRtSceneLightCount; index++)
-        {
-            SLightTraceResult lightTraceResult = TraceLight(ray,index);
-
-            if(lightTraceResult.m_hitT < 0.0)
+            SMaterialSample materialSample = SampleMaterial(rtRaylod,randomSample);
+            if(materialSample.m_pdf < 0.0 || asuint(materialSample.m_pdf) > 0x7F800000)
             {
-                continue;
+                break;
             }
 
-            float3 lightContribution = pathThroughput * lightTraceResult.m_radiance;
-            if(vLightPickingCdfPreSum > 0)
+            float3 nextPathThroughput = pathThroughput * materialSample.m_weight;
+            if(!any(nextPathThroughput > 0))
             {
-                float previousCdfValue = index > 0 ? aLightPickingCdf[index - 1] : 0.0;
-				float lightPickPdf = (aLightPickingCdf[index] - previousCdfValue) / vLightPickingCdfPreSum;
+                break;
+            }
 
-                lightContribution *= MISWeightRobust(materialSample.m_pdf,lightPickPdf * lightTraceResult.m_pdf);
+            float maxNextPathThroughput = max(max(nextPathThroughput.x, nextPathThroughput.y),nextPathThroughput.z);
+            float maxPathThroughput = max(max(pathThroughput.x, pathThroughput.y),pathThroughput.z);
 
-                if (any(lightContribution > 0))
+            float continuationProbability = sqrt(saturate(maxNextPathThroughput / maxPathThroughput));
+            if(continuationProbability < 1 && bounce != 0)
+            {
+                float russianRouletteRand = randomSample.w;
+		    	if (russianRouletteRand >= continuationProbability)
+		    	{
+		    		break;
+		    	}
+		    	pathThroughput = nextPathThroughput / continuationProbability;
+            }
+            else
+            {
+                pathThroughput = nextPathThroughput;
+            }
+
+            ray.Origin = rtRaylod.m_worldPosition;
+            ray.Direction = normalize(materialSample.m_direction);
+            ray.TMin = 0.0f;
+            ray.TMax = POSITIVE_INFINITY;
+
+            ray.Origin += abs(rtRaylod.m_worldPosition) * 0.001f * rtRaylod.m_worldNormal;
+
+            if(bounce == 0)
+            {
+                radianceDirection = ray.Direction;
+            }
+
+            for(uint index = 0; index < m_nRtSceneLightCount; index++)
+            {
+                SLightTraceResult lightTraceResult = TraceLight(ray,index);
+
+                if(lightTraceResult.m_hitT < 0.0)
                 {
-                    SMaterialClosestHitPayload shadowRayPaylod = (SMaterialClosestHitPayload)0;
-                    RayDesc shadowRay = ray;
-                    shadowRay.TMax = lightTraceResult.m_hitT;
+                    continue;
+                }
 
-                    TraceRay(
-	                    	rtScene, // AccelerationStructure
-	                    	RAY_FLAG_FORCE_OPAQUE,
-	                    	RAY_TRACING_MASK_OPAQUE, 
-	                    	RT_SHADOW_SHADER_INDEX, // RayContributionToHitGroupIndex
-	                    	1, // MultiplierForGeometryContributionToShaderIndex
-	                    	0, // MissShaderIndex
-	                    	shadowRay, // RayDesc
-	                    	shadowRayPaylod // Payload
-	                );
+                float3 lightContribution = pathThroughput * lightTraceResult.m_radiance;
+                if(vLightPickingCdfPreSum > 0)
+                {
+                    float previousCdfValue = index > 0 ? aLightPickingCdf[index - 1] : 0.0;
+		    		float lightPickPdf = (aLightPickingCdf[index] - previousCdfValue) / vLightPickingCdfPreSum;
 
-                    if(shadowRayPaylod.m_vHiTt <= 0)
+                    lightContribution *= MISWeightRobust(materialSample.m_pdf,lightPickPdf * lightTraceResult.m_pdf);
+
+                    if (any(lightContribution > 0))
                     {
-                        lightContribution = 0.0;
-                    }
+                        SMaterialClosestHitPayload shadowRayPaylod = (SMaterialClosestHitPayload)0;
+                        RayDesc shadowRay = ray;
+                        shadowRay.TMax = lightTraceResult.m_hitT;
 
-                    radianceValue += lightContribution;
+                        TraceRay(
+	                        	rtScene, // AccelerationStructure
+	                        	RAY_FLAG_FORCE_OPAQUE,
+	                        	RAY_TRACING_MASK_OPAQUE, 
+	                        	RT_SHADOW_SHADER_INDEX, // RayContributionToHitGroupIndex
+	                        	1, // MultiplierForGeometryContributionToShaderIndex
+	                        	0, // MissShaderIndex
+	                        	shadowRay, // RayDesc
+	                        	shadowRayPaylod // Payload
+	                    );
+
+                        if(shadowRayPaylod.m_vHiTt <= 0)
+                        {
+                            lightContribution = 0.0;
+                        }
+
+                        radianceValue += lightContribution;
+                    }
                 }
             }
         }
@@ -1306,14 +1060,14 @@ void LightMapRayTracingRayGen()
             irradianceAndSampleCount.rgb += directionalLightRadianceValue;
         }
 
-        {
-            float TangentZ = saturate(dot(radianceDirection, worldFaceNormal)); //TODO: Shading Normal?
-            if(TangentZ > 0.0)
-            {
-                shDirectionality += Luminance(radianceValue) * SHBasisFunction(radianceDirection);
-            }
-            irradianceAndSampleCount.rgb += radianceValue;            
-        }
+        //{
+        //    float TangentZ = saturate(dot(radianceDirection, worldFaceNormal)); //TODO: Shading Normal?
+        //    if(TangentZ > 0.0)
+        //    {
+        //        shDirectionality += Luminance(radianceValue) * SHBasisFunction(radianceDirection);
+        //    }
+        //    irradianceAndSampleCount.rgb += radianceValue;            
+        //}
 
     }   
 
@@ -1324,12 +1078,10 @@ void LightMapRayTracingRayGen()
 
         float4 swizzedSH = shDirectionality.yzwx;
         shDirectionalityAndSubLuma2[rayIndex] = swizzedSH;
-
-        const half LogBlackPoint = 0.01858136;
+        
         encodedIrradianceAndSubLuma1[rayIndex] = float4(
             sqrt(max(irradianceAndSampleCount.rgb, float3(0.00001, 0.00001, 0.00001))),
-            //log2( 1 + LogBlackPoint ) - (swizzedSH.w / 255 - 0.5 / 255)
-            1.0 // currently use 128 bit light map for testing 
+            1.0 
             );
     }
 
@@ -1342,100 +1094,53 @@ void LightMapRayTracingRayGen()
 void MaterialClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTracingIntersectionAttributes attributes)
 {
     const float3 barycentrics = float3(1.0 - attributes.x - attributes.y, attributes.x, attributes.y);
-    StructuredBuffer<uint3> indexBuffer = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_ibIndex)]
-    uint3 primitiveIndices = indexBuffer[PrimitiveIndex()];
+    SMeshInstanceGpuData meshInstanceGpuData = rtSceneInstanceGpuData[InstanceIndex()];
 
-    SMaterialGpuData instanceMaterialData = rtAtlasInstanceMaterialData[InstanceIndex()];
+    const float4x4 worldTM = meshInstanceGpuData.m_worldTM;
+    const uint ibStride = meshInstanceGpuData.ibStride;
+    const uint ibIndex = meshInstanceGpuData.ibIndex;
+    const uint vbIndex = meshInstanceGpuData.vbIndex;
 
-    //texture uv
-    float2 textureUV = float2(0,0);
-    if(instanceMaterialData.m_useTextureUV)
+    uint primitiveIndex = PrimitiveIndex();
+    uint baseIndex = primitiveIndex * 3;
+
+    uint3 indices;
+    if(ibStride == 0) // dont have index buffer
     {
-        StructuredBuffer<float2> textureUVBuffer = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_textureUVVBIndex)];
-        float2 textureUV0 = textureUVBuffer[primitiveIndices.x];
-        float2 textureUV1 = textureUVBuffer[primitiveIndices.y];
-        float2 textureUV2 = textureUVBuffer[primitiveIndices.z];
-        textureUV = textureUV0 * barycentrics.x + textureUV1 * barycentrics.y + textureUV2 * barycentrics.z;
+        indices = uint3(baseIndex, baseIndex + 1, baseIndex + 2);
+    }
+    else if(ibStride == 2) // 16 bit
+    {
+        // todo
+    }
+    else // 32 bit
+    {
+        // todo
     }
 
-    // base color
-    float3 baseColor = float3(1.0,1.0,1.0);
-    if(instanceMaterialData.m_useBaseColorTex)
-    {
-        Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_baseColorTexIndex)];
-        baseColor = baseColorTexture.SampleLevel(gSamLinearWarp, textureUV, 0.0);
-    }
-    else
-    {
-        baseColor = instanceMaterialData.m_defaultBaseColorValue;
-    }
+    // vertex stride = 32 bit * 3 = 24 byte
+    float3 localVertex0 = asfloat(bindlessByteAddressBuffer[vbIndex].Load3(indices.x * 24));
+    float3 localVertex1 = asfloat(bindlessByteAddressBuffer[vbIndex].Load3(indices.y * 24));
+    float3 localVertex2 = asfloat(bindlessByteAddressBuffer[vbIndex].Load3(indices.z * 24));
 
-    // metallic
-    float metallic = 0.0;
-    if(instanceMaterialData.m_useMetallicTex)
-    {
-        Texture2D<float4> metallicTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_metallicTexIndex)];
-        float4 metallicRGBA = metallicTexture.SampleLevel(gSamLinearWarp, textureUV, 0.0);
-        float rgbaArray[4]; 
-        rgbaArray[0] = metallicRGBA.x;
-        rgbaArray[1] = metallicRGBA.y;
-        rgbaArray[2] = metallicRGBA.z;
-        rgbaArray[3] = metallicRGBA.w;
-        metallic = rgbaArray[instanceMaterialData.m_metallicChannelIndex]
-    }
-    else
-    {
-        metallic = instanceMaterialData.m_metallicDefaultValue;
-    }
+    float3 wolrdPosition0 =  mul(worldTM, float4(localVertex0,1.0)).xyz;
+    float3 wolrdPosition1 =  mul(worldTM, float4(localVertex1,1.0)).xyz;
+    float3 wolrdPosition2 =  mul(worldTM, float4(localVertex2,1.0)).xyz;
 
-    // TODO
-    float3 specularColor = baseColor * metallic;
-    float3 diffuseColor = baseColor - specularColor;
+    float3 PA = wolrdPosition1 - wolrdPosition0;
+	float3 PB = wolrdPosition2 - wolrdPosition0;
+    float3 Unnormalized = cross(PB, PA);
+	float InvWorldArea = rsqrt(dot(Unnormalized, Unnormalized));
+    float3 FaceNormal = Unnormalized * InvWorldArea;
 
-    // base/diff/spec color
-    payload.m_baseColor = baseColor;
-    payload.m_specColor = specularColor;
-    payload.m_diffuseColor = diffuseColor;
-
-    // roughness
-    float roughness = 1.0f;
-    if(instanceMaterialData.m_useRoughnessTex)
-    {
-        Texture2D<float4> roughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_roughnessTexIndex)];
-        float4 roughnessRGBA = roughnessTexture.SampleLevel(gSamLinearWarp, textureUV, 0.0);
-        float rgbaArray[4]; 
-        rgbaArray[0] = roughnessRGBA.x;
-        rgbaArray[1] = roughnessRGBA.y;
-        rgbaArray[2] = roughnessRGBA.z;
-        rgbaArray[3] = roughnessRGBA.w;
-        roughness = rgbaArray[instanceMaterialData.m_roughnessChannelIndex]
-    }
-    else
-    {
-        roughness = instanceMaterialData.m_defaultRoughnessValue;
-    }
-
-    // todo: calculate world position and world normal form vertex buffer rather than gbuffer
-    // world normal and world position
-    StructuredBuffer<float2> lightMapUVBuffer = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_lightMapUVVBIndex)];
-    float2 lightMapUV0 = lightMapUVBuffer[primitiveIndices.x];
-    float2 lightMapUV1 = lightMapUVBuffer[primitiveIndices.y];
-    float2 lightMapUV2 = lightMapUVBuffer[primitiveIndices.z];
-    float2 lightMapUV = lightMapUV0 * barycentrics.x + lightMapUV1 * barycentrics.y + lightMapUV2 * barycentrics.z;
-
-    Texture2D<float4> worldPositionTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_gBufferTexIndex * 2)];
-    Texture2D<float4> worldNormalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(instanceMaterialData.m_gBufferTexIndex * 2 + 1)];
+    float3 worldPosition = wolrdPosition0 * barycentrics.x + wolrdPosition1 * barycentrics.y + wolrdPosition2 * barycentrics.z;;
     
-    float2 atlasUV = lightMapUV * instanceMaterialData.m_lightMapScaleAndBias + instanceMaterialData.m_lightMapScaleAndBias;
-
-    float3 worldPosition = worldPositionTexture.SampleLevel(gSamPointWarp, atlasUV, 0.0);
-    float3 worldNormal = worldNormalTexture.SampleLevel(gSamPointWarp, atlasUV, 0.0);
+    payload.m_roughness = 1.0;
+    payload.m_baseColor = float3(1,1,1);
+    payload.m_specColor = float3(0,0,0);
+    payload.m_diffuseColor = float3(1,1,1);
     payload.m_worldPosition = worldPosition;
-    payload.m_worldFaceNormal = worldNormal;
-
-    // shading model id
-    payload.m_shadingModelID = instanceMaterialData.m_shadingModelID;
-
+    payload.m_worldNormal = FaceNormal;
     // isFronFace
     if (HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE)
     {
@@ -1523,6 +1228,6 @@ SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
     float4 SH = lightmap1.xyzw;
     float Directionality = dot(SH,float4(wordlNormal.yzx,1.0));
 
-    output.giResult = float4(irradiance * luma * Directionality  + float3(IN.lightMapUV.xy , IN.lightMapUV.x + IN.lightMapUV.y) * 0.05f /*test code*/, 1.0);
+    output.giResult = float4(irradiance + float3(IN.lightMapUV.xy , IN.lightMapUV.x + IN.lightMapUV.y) * 0.05f /*test code*/, 1.0);
     return output;
 }

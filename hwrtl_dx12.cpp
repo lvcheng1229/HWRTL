@@ -155,6 +155,8 @@ namespace hwrtl
 
         uint32_t GetAndAddCurrentPassSlotStart(uint32_t numSlotUsed);
     private:
+        uint32_t m_maxDescNum;
+
         ID3D12DescriptorHeapPtr m_pDescHeap;
 
         D3D12_CPU_DESCRIPTOR_HANDLE m_hCpuBegin;
@@ -185,11 +187,6 @@ namespace hwrtl
             // TODO: Release Desc In Desc Manager
         }
 
-        uint32_t GetBindlessIndex() override
-        {
-            return 0;
-        }
-
         CDx12Resouce m_dxResource;
 
         CDx12View m_uav;
@@ -206,6 +203,8 @@ namespace hwrtl
             // TODO: Release Desc In Desc Manager
         }
 
+        virtual uint32_t GetOrAddVBIBBindlessIndex() override;
+
         CDx12Resouce m_dxResource;
 
         CDx12View m_uav;
@@ -213,6 +212,9 @@ namespace hwrtl
         CDx12View m_cbv;
 
         D3D12_VERTEX_BUFFER_VIEW m_vbv;
+
+        bool m_bBindlessValid = false;
+        uint32_t m_bindlessDescIndex;
     };
 
     class CDxGraphicsPipelineState : public CGraphicsPipelineState
@@ -239,6 +241,7 @@ namespace hwrtl
         ID3D12ResourcePtr m_pShaderTable;
         uint32_t m_nShaderNum[4];
         uint32_t m_slotDescNum[4];
+        uint32_t m_bindlessRootTableIndex;
 
         CDxRayTracingPipelineState()
         {
@@ -247,6 +250,7 @@ namespace hwrtl
             m_pRtPipelineState = nullptr;
             m_nShaderNum[0] = m_nShaderNum[1] = m_nShaderNum[2] = m_nShaderNum[3] = 0;
             m_slotDescNum[0] = m_slotDescNum[1] = m_slotDescNum[2] = m_slotDescNum[3] = 0;
+            m_bindlessRootTableIndex = 0;
         }
     };
    
@@ -297,6 +301,8 @@ namespace hwrtl
         CDx12DescManager m_rtvDescManager;
         CDx12DescManager m_dsvDescManager;
         CDx12DescManager m_csuDescManager;
+
+        CDXPassDescManager m_bindlessDescManager;
 
         CDxResourceBarrierManager dxBarrierManager;
 
@@ -360,6 +366,7 @@ namespace hwrtl
         D3D12_CPU_DESCRIPTOR_HANDLE m_viewHandles[4][nHandlePerView];
         bool m_bViewTableDirty[4];
         bool m_bPipelineStateDirty;
+        uint32_t m_bindlessRootTableIndex;
 
         ID3D12RootSignaturePtr m_pGlobalRootSig;
         ID3D12StateObjectPtr m_pRtPipelineState;
@@ -539,11 +546,15 @@ namespace hwrtl
         return pQueue;
     }
 
-    static ID3D12RootSignaturePtr CreateRootSignature(ID3D12Device5Ptr pDevice, const D3D12_ROOT_SIGNATURE_DESC& desc)
+    static ID3D12RootSignaturePtr CreateRootSignature(ID3D12Device5Ptr pDevice, const D3D12_ROOT_SIGNATURE_DESC1& desc)
     {
+        D3D12_VERSIONED_ROOT_SIGNATURE_DESC versionedRootDesc;
+        versionedRootDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
+        versionedRootDesc.Desc_1_1 = desc;
+
         ID3DBlobPtr pSigBlob;
         ID3DBlobPtr pErrorBlob;
-        HRESULT hr = D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &pSigBlob, &pErrorBlob);
+        HRESULT hr = D3D12SerializeVersionedRootSignature(&versionedRootDesc, &pSigBlob, &pErrorBlob);
         if (FAILED(hr))
         {
             std::string msg = ConvertBlobToString(pErrorBlob.GetInterfacePtr());
@@ -885,8 +896,8 @@ namespace hwrtl
     {
         void Init(ID3D12Device5Ptr pDevice, SShaderResources rayTracingResources)
         {
-            std::vector<D3D12_ROOT_PARAMETER> rootParams;
-            std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
+            std::vector<D3D12_ROOT_PARAMETER1> rootParams;
+            std::vector<D3D12_DESCRIPTOR_RANGE1> descRanges;
 
             uint32_t totalRootNum = 0;
             for (uint32_t descRangeIndex = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; descRangeIndex <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; descRangeIndex++)
@@ -898,7 +909,7 @@ namespace hwrtl
                 }
             }
 
-            rootParams.resize(totalRootNum);
+            rootParams.resize(totalRootNum + 1);
             descRanges.resize(totalRootNum);
 
             uint32_t rootTabbleIndex = 0;
@@ -908,12 +919,13 @@ namespace hwrtl
                 uint32_t rangeNum = rayTracingResources[descRangeIndex];
                 if (rangeNum > 0)
                 {
-                    D3D12_DESCRIPTOR_RANGE descRange;
+                    D3D12_DESCRIPTOR_RANGE1 descRange;
                     descRange.BaseShaderRegister = 0;
                     descRange.NumDescriptors = rangeNum;
                     descRange.RegisterSpace = 0;
                     descRange.OffsetInDescriptorsFromTableStart = 0;
                     descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(descRangeIndex);
+                    descRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
                     descRanges[rootTabbleIndex] = descRange;
                     
                     rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -924,7 +936,19 @@ namespace hwrtl
                 }
             }
 
-            D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+            D3D12_DESCRIPTOR_RANGE1 bindlessDescRange;
+            bindlessDescRange.BaseShaderRegister = 0;
+            bindlessDescRange.NumDescriptors = -1;
+            bindlessDescRange.RegisterSpace = 1;
+            bindlessDescRange.OffsetInDescriptorsFromTableStart = 0;
+            bindlessDescRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+            bindlessDescRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV);
+
+            rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            rootParams[rootTabbleIndex].DescriptorTable.NumDescriptorRanges = 1;
+            rootParams[rootTabbleIndex].DescriptorTable.pDescriptorRanges = &bindlessDescRange;
+
+            D3D12_ROOT_SIGNATURE_DESC1 rootSigDesc = {};
             rootSigDesc.NumParameters = rootParams.size();
             rootSigDesc.pParameters = rootParams.data();
             rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
@@ -1126,7 +1150,9 @@ namespace hwrtl
 
     void CDXPassDescManager::Init(ID3D12Device5Ptr pDevice)
     {
-        m_pDescHeap = Dx12CreateDescriptorHeap(pDevice, 1024, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
+        m_maxDescNum = 1024;
+
+        m_pDescHeap = Dx12CreateDescriptorHeap(pDevice, m_maxDescNum, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
 
         m_hCpuBegin = m_pDescHeap->GetCPUDescriptorHandleForHeapStart();
         m_hGpuBegin = m_pDescHeap->GetGPUDescriptorHandleForHeapStart();
@@ -1149,6 +1175,12 @@ namespace hwrtl
     {
         uint32_t returnValue = m_nCurrentStartSlotIndex;
         m_nCurrentStartSlotIndex += numSlotUsed;
+
+        if (m_nCurrentStartSlotIndex >= m_maxDescNum)
+        {
+            assert(false);
+            //todo
+        }
         return returnValue;
     }
 
@@ -1182,6 +1214,7 @@ namespace hwrtl
         m_rtvDescManager.Init(m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, false);
         m_csuDescManager.Init(m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, false);
         m_dsvDescManager.Init(m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, false);
+        m_bindlessDescManager.Init(m_pDevice);
 
         ThrowIfFailed(m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_pCmdAllocator)));
         ThrowIfFailed(m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_pCmdAllocator, nullptr, IID_PPV_ARGS(&m_pCmdList)));
@@ -1200,6 +1233,29 @@ namespace hwrtl
         PIXBeginCapture(PIX_CAPTURE_GPU, &pixCaptureParameters);
 #endif
     }
+
+    /***************************************************************************
+    * CBindlessResourceManager
+    ***************************************************************************/
+
+    uint32_t CDxBuffer::GetOrAddVBIBBindlessIndex()
+    {
+        if (m_bBindlessValid)
+        {
+            return m_bindlessDescIndex;
+        }
+        else
+        {
+            m_bBindlessValid = true;
+
+            uint32_t numCopy = 1;
+            uint32_t startIndex = pDXDevice->m_bindlessDescManager.GetAndAddCurrentPassSlotStart(numCopy);
+            D3D12_CPU_DESCRIPTOR_HANDLE destCPUHandle = pDXDevice->m_bindlessDescManager.GetCPUHandle(startIndex);
+            pDXDevice->m_pDevice->CopyDescriptors(1, &destCPUHandle, &numCopy, numCopy, &m_srv.m_pCpuDescHandle, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            return startIndex;
+        }
+    }
+  
 
     /***************************************************************************
     * CDxDeviceCommand
@@ -1234,10 +1290,17 @@ namespace hwrtl
         SShaderDefine* shaderDefines = rtPsoDesc.shaderDefines;
         uint32_t defineNum = rtPsoDesc.defineNum;
 
+        uint32_t totalRootNum = 0;
+
         std::shared_ptr<CDxRayTracingPipelineState> pDxRayTracingPipelineState = std::make_shared<CDxRayTracingPipelineState>();
         for (uint32_t index = 0; index < 4; index++)
         {
             pDxRayTracingPipelineState->m_slotDescNum[index] = rayTracingResources[index];
+
+            if (rayTracingResources[index] > 0)
+            {
+                totalRootNum++;
+            }
         }
 
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
@@ -1411,6 +1474,7 @@ namespace hwrtl
         offsetShaderTableIndex += rayHitShaderIdentifiers.size();
 
         pDxRayTracingPipelineState->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pDXDevice->m_tempBuffers.AllocResource());
+        pDxRayTracingPipelineState->m_bindlessRootTableIndex = totalRootNum;
 
         return pDxRayTracingPipelineState;
     }
@@ -1434,8 +1498,8 @@ namespace hwrtl
 
         // create root signature
         {
-            std::vector<D3D12_ROOT_PARAMETER> rootParams;
-            std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
+            std::vector<D3D12_ROOT_PARAMETER1> rootParams;
+            std::vector<D3D12_DESCRIPTOR_RANGE1> descRanges;
 
             uint32_t totalRootNum = 0;
             for (uint32_t descRangeIndex = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; descRangeIndex <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; descRangeIndex++)
@@ -1457,12 +1521,13 @@ namespace hwrtl
                 uint32_t rangeNum = rasterizationResources[descRangeIndex];
                 if (rangeNum > 0)
                 {
-                    D3D12_DESCRIPTOR_RANGE descRange;
+                    D3D12_DESCRIPTOR_RANGE1 descRange;
                     descRange.BaseShaderRegister = 0;
                     descRange.NumDescriptors = rangeNum;
                     descRange.RegisterSpace = 0;
                     descRange.OffsetInDescriptorsFromTableStart = 0;
                     descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(descRangeIndex);
+                    descRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
                     descRanges[rootTabbleIndex] = descRange;
 
                     rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1474,7 +1539,7 @@ namespace hwrtl
                 }
             }
 
-            D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+            D3D12_ROOT_SIGNATURE_DESC1 rootSigDesc = {};
             rootSigDesc.NumParameters = rootParams.size();
             rootSigDesc.pParameters = rootParams.data();
             rootSigDesc.NumStaticSamplers = 6;
@@ -1678,7 +1743,7 @@ namespace hwrtl
 
         dxBuffer->m_dxResource.m_pResource = CreateDefaultBuffer(pInitData, nByteSize, pDXDevice->m_tempBuffers.AllocResource());
 
-        if (bufferUsage == EBufferUsage::USAGE_VB)
+        if (EnumHasAnyFlags(bufferUsage, EBufferUsage::USAGE_VB))
         {
             D3D12_VERTEX_BUFFER_VIEW vbView = {};
             vbView.BufferLocation = dxBuffer->m_dxResource.m_pResource->GetGPUVirtualAddress();
@@ -1687,12 +1752,12 @@ namespace hwrtl
             dxBuffer->m_vbv = vbView;
         }
 
-        if (bufferUsage == EBufferUsage::USAGE_IB)
+        if (EnumHasAnyFlags(bufferUsage,EBufferUsage::USAGE_IB))
         {
             assert(false);
         }
 
-        if (bufferUsage == EBufferUsage::USAGE_CB)
+        if (EnumHasAnyFlags(bufferUsage, EBufferUsage::USAGE_CB))
         {
             D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
             cbvDesc.BufferLocation = dxBuffer->m_dxResource.m_pResource->GetGPUVirtualAddress();
@@ -1709,7 +1774,7 @@ namespace hwrtl
             dxBuffer->m_cbv = CDx12View{ cpuHandle ,gpuHandle ,cbvIndex };
         }
 
-        if (bufferUsage == EBufferUsage::USAGE_Structure)
+        if(EnumHasAnyFlags(bufferUsage, EBufferUsage::USAGE_Structure) || EnumHasAnyFlags(bufferUsage, EBufferUsage::USAGE_BYTE_ADDRESS))
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
             srvDesc.Format = DXGI_FORMAT_UNKNOWN;
@@ -1956,6 +2021,7 @@ namespace hwrtl
         }
 
         m_bPipelineStateDirty = true;
+        m_bindlessRootTableIndex = dxRayTracingPSO->m_bindlessRootTableIndex;
     }
 
     void CDx12RayTracingContext::SetTLAS(std::shared_ptr<CTopLevelAccelerationStructure> tlas, uint32_t bindIndex)
@@ -1994,7 +2060,7 @@ namespace hwrtl
 
     void hwrtl::CDx12RayTracingContext::SetConstantBuffer(std::shared_ptr<CBuffer> constantBuffer, uint32_t bindIndex)
     {
-                CDxBuffer* pDxBuffer = static_cast<CDxBuffer*>(constantBuffer.get());
+        CDxBuffer* pDxBuffer = static_cast<CDxBuffer*>(constantBuffer.get());
         m_viewHandles[uint32_t(ESlotType::ST_B)][bindIndex] = pDxBuffer->m_cbv.m_pCpuDescHandle;
         m_bViewTableDirty[uint32_t(ESlotType::ST_B)] = true;
     }
@@ -2009,6 +2075,9 @@ namespace hwrtl
         {
             ApplySlotViews(ESlotType(index));
         }
+
+        // bindless binding
+        pCommandList->SetComputeRootDescriptorTable(m_bindlessRootTableIndex, pDXDevice->m_bindlessDescManager.GetGPUHandle(0));
 
         pDXDevice->dxBarrierManager.FlushResourceBarrier(pCommandList);
 
@@ -2047,6 +2116,8 @@ namespace hwrtl
 
             m_bViewTableDirty[slotIndex] = false;
         }
+
+
     }
 
     D3D12_DISPATCH_RAYS_DESC CDx12RayTracingContext::CreateRayTracingDesc(uint32_t width, uint32_t height)
@@ -2132,7 +2203,7 @@ namespace hwrtl
         {
             m_viewSlotIndex[index] = m_viewSlotIndex[index - 1] + (m_slotDescNum[index - 1] > 0 ? 1 : 0);
         }
-
+        
         m_bPipelineStateDirty = true;
     }
   

@@ -58,74 +58,18 @@ namespace gi
 		E_DEFAULT_LIT = (1 << 1),
 	};
 
-	class CMaterialBaseColorProperty
-	{
-	public:
-		inline std::shared_ptr<CTexture2D> GetTexture() const { return m_baseColorTex; }
-		inline Vec3 GetDefaultValue() const { return m_baseColorDefaultValue; };
-		inline bool IsUseTexture() const { return m_bUseTexture; };
-		inline void SetDefaultValue(Vec3 defaultValue) { m_baseColorDefaultValue = defaultValue; }
-		inline void SetBaseColorTexture(std::shared_ptr<CTexture2D>baseColorTexture)
-		{
-			m_baseColorTex = baseColorTexture;
-			m_bUseTexture = true;
-		}
-
-	private:
-		std::shared_ptr<CTexture2D> m_baseColorTex;
-		Vec3 m_baseColorDefaultValue;
-		bool m_bUseTexture = false;
-	};
-
-	class CMaterialOneChannelProperty
-	{
-	public:
-		inline std::shared_ptr<CTexture2D> GetTexture() const { return m_usedTexture; }
-		inline bool IsUseTexture() const { return m_bUseTexture; }
-		inline uint32_t GetChannelValue() const { return m_channelIndex; }
-		inline void SetDefaultValue(float defaultValue) { m_defaultValue = defaultValue; }
-		inline float GetDefaultValue() const { return m_defaultValue; }
-		inline void SetRoughnessTexture(std::shared_ptr<CTexture2D>inputTexture, uint32_t channelIndex)
-		{
-			m_usedTexture = inputTexture;
-			m_channelIndex = channelIndex;
-		}
-	private:
-		uint32_t m_channelIndex;
-		std::shared_ptr<CTexture2D> m_usedTexture;
-		float m_defaultValue;
-		bool m_bUseTexture = false;
-	};
-
-	class SMaterialProperties
-	{
-	public:
-		SMaterialProperties()
-		{
-			m_materialBaseColorProperty.SetDefaultValue(Vec3(1,1,1));
-			m_materialRoughnessProperty.SetDefaultValue(1.0);
-			m_materialMetallicProperty.SetDefaultValue(0.0);
-		}
-		CMaterialBaseColorProperty m_materialBaseColorProperty;
-		CMaterialOneChannelProperty m_materialRoughnessProperty;
-		CMaterialOneChannelProperty m_materialMetallicProperty;
-		EShadingModelID m_shadingModelID = EShadingModelID::E_DEFAULT_LIT;
-	};
 
 	struct SBakeMeshDesc
 	{
 		const Vec3* m_pPositionData = nullptr;
 		const Vec2* m_pLightMapUVData = nullptr;
 		const Vec3i* m_pIndexData = nullptr;
-		const Vec2* m_pTextureUV = nullptr; // optional
 		const Vec3* m_pNormalData = nullptr; // optional
 
 		uint32_t m_nVertexCount = 0;
 		uint32_t m_nIndexCount = 0;
 
 		Vec2i m_nLightMapSize;
-
-		SMaterialProperties m_mltProp;
 
 		SMeshInstanceInfo m_meshInstanceInfo;
 	};

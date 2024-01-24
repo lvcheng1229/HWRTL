@@ -127,10 +127,10 @@ namespace gi
         Vec4 m_lightMapScaleAndBias;
 
         uint32_t m_nVertexCount = 0;
+        uint32_t m_nIndexCount = 0;
+        uint32_t m_nIndexStride = 0;
 
         int m_nAtlasIndex;
-
-        SMaterialProperties m_mltProps;
 
         SMeshInstanceInfo m_meshInstanceInfo;
 	};
@@ -177,43 +177,15 @@ namespace gi
     };
     static_assert(sizeof(SRtGlobalConstantBuffer) == 256, "sizeof(SRtGlobalConstantBuffer) == 256");
 
-    struct SGpuMaterial
+    struct SMeshInstanceGpuData
     {
-        // 0 bytes
-        uint32_t m_useTextureUV;
-        uint32_t m_textureUVVBIndex;
-        uint32_t m_positionVBIndex;
+        Matrix44 m_worldTM;
+
+        uint32_t m_ibStride;
         uint32_t m_ibIndex;
-
-        // 16 bytes
-        // base color
-        uint32_t m_useBaseColorTexture;
-        Vec3 m_defaultBaseColorValue;
-        uint32_t m_baseColorBindlessIndex;
-
-        // 36 bytes
-        //roughness
-        uint32_t m_useRoughnessTexture;
-        float m_roughnessDefaultValue;
-        uint32_t m_roughnessChannelIndex;
-        uint32_t m_roughnessBindlessIndex;
-
-        // 52 bytes
-        //metallic
-        uint32_t m_useMetallicTexture;
-        float m_metallicDefaultValue;
-        uint32_t m_metallicChannelIndex;
-        uint32_t m_metallicBindlessIndex;
-
-        //68 bytes
-        // world position and world normal
-        uint32_t m_lightMapUVVBIndex;
-        Vec4 m_lightMapScaleAndBias;
-        uint32_t m_gBufferTexIndex;
-
-        uint32_t m_shadingModelID;
-    };  // 96 bytes
-
+        uint32_t m_vbIndex;
+        uint32_t unused;
+    };
 
     class CHWRTLLightMapDenoiser
     {
@@ -232,7 +204,7 @@ namespace gi
 
         std::shared_ptr<CBuffer> pRtSceneLight;
         std::shared_ptr<CBuffer> pRtSceneGlobalCB;
-
+        std::shared_ptr<CBuffer> pRtSceneInstanceGpuData;
         std::shared_ptr<CBuffer> pVisualizeViewCB;
 
         std::shared_ptr<CGraphicsPipelineState>m_pLightMapGBufferPSO;
@@ -345,17 +317,6 @@ namespace gi
     {
         assert(bakeMeshDesc.m_pPositionData != nullptr);
         assert(bakeMeshDesc.m_pLightMapUVData != nullptr);
-        assert(bakeMeshDesc.m_pIndexData != nullptr);
-
-        bool bUseTexture =
-            bakeMeshDesc.m_mltProp.m_materialBaseColorProperty.IsUseTexture() ||
-            bakeMeshDesc.m_mltProp.m_materialRoughnessProperty.IsUseTexture() ||
-            bakeMeshDesc.m_mltProp.m_materialMetallicProperty.IsUseTexture();
-
-        if (bUseTexture)
-        {
-            assert((bakeMeshDesc.m_pTextureUV != nullptr) && "you muse set the texture uv data if use texture as ray tracing material input");
-        }
 
         if (pGiBaker->m_bakeConfig.m_bAddVisualizePass)
         {
@@ -372,18 +333,17 @@ namespace gi
 
             ValidateMeshDesc(bakeMeshDesc);
 
-            giMesh.m_positionVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pPositionData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
-            giMesh.m_lightMapUVVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pLightMapUVData, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB);
-            giMesh.m_indexBuffer = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pIndexData, bakeMeshDesc.m_nIndexCount * sizeof(Vec3i), sizeof(Vec3i), EBufferUsage::USAGE_IB);
+            giMesh.m_positionVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pPositionData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB | EBufferUsage::USAGE_BYTE_ADDRESS);
+            giMesh.m_lightMapUVVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pLightMapUVData, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB | EBufferUsage::USAGE_BYTE_ADDRESS);
 
-            if (bakeMeshDesc.m_pTextureUV)
+            if (bakeMeshDesc.m_pIndexData)
             {
-                giMesh.m_textureUVVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pTextureUV, bakeMeshDesc.m_nVertexCount * sizeof(Vec2), sizeof(Vec2), EBufferUsage::USAGE_VB);
+                giMesh.m_indexBuffer = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pIndexData, bakeMeshDesc.m_nIndexCount * sizeof(Vec3i), sizeof(Vec3i), EBufferUsage::USAGE_IB | EBufferUsage::USAGE_BYTE_ADDRESS);
             }
-            
+
             if (bakeMeshDesc.m_pNormalData)
             {
-                giMesh.m_normalVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pNormalData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB);
+                giMesh.m_normalVB = CGIBaker::GetDeviceCommand()->CreateBuffer(bakeMeshDesc.m_pNormalData, bakeMeshDesc.m_nVertexCount * sizeof(Vec3), sizeof(Vec3), EBufferUsage::USAGE_VB | EBufferUsage::USAGE_BYTE_ADDRESS);
             }
            
             giMesh.m_nVertexCount = bakeMeshDesc.m_nVertexCount;
@@ -393,8 +353,6 @@ namespace gi
 
             giMesh.m_pGpuMeshData->m_nVertexCount = giMesh.m_nVertexCount;
             giMesh.m_pGpuMeshData->m_pVertexBuffer = giMesh.m_positionVB;
-
-            giMesh.m_mltProps = bakeMeshDesc.m_mltProp;
 
             std::vector<SMeshInstanceInfo> instanceInfos;
             instanceInfos.push_back(giMesh.m_meshInstanceInfo);
@@ -432,6 +390,7 @@ namespace gi
                     Vec4 lightMapScaleAndBias;
                     float padding[44];
                 }gBufferCbData;
+                static_assert(sizeof(SGbufferGenPerGeoCB) == 256,"sizeof(SGbufferGenPerGeoCB) == 256");
 
                 gBufferCbData.m_worldTM.SetIdentity();
 
@@ -443,7 +402,7 @@ namespace gi
                     }
                 }
 
-                for (uint32_t i = 0; i < 40; i++)
+                for (uint32_t i = 0; i < 44; i++)
                 {
                     gBufferCbData.padding[i] = 1.0;
                 }
@@ -490,6 +449,32 @@ namespace gi
         CGIBaker::GetGraphicsContext()->EndRenderPasss();
 	}
 
+    static void AllocRtSceneGpuInstanceData(std::vector<SMeshInstanceGpuData>& sceneInstanceData)
+    {
+        uint32_t sceneMeshNum = pGiBaker->m_giMeshes.size();
+        sceneInstanceData.resize(sceneMeshNum);
+        for (uint32_t index = 0; index < sceneMeshNum; index++)
+        {
+            auto& giMesh = pGiBaker->m_giMeshes[index];
+            SMeshInstanceGpuData& meshInstanceGpuData = sceneInstanceData[index];
+            meshInstanceGpuData.m_worldTM.SetIdentity();
+
+            for (uint32_t i = 0; i < 4; i++)
+            {
+                for (uint32_t j = 0; j < 3; j++)
+                {
+                    meshInstanceGpuData.m_worldTM.m[i][j] = giMesh.m_meshInstanceInfo.m_transform[j][i];
+                }
+            }
+            meshInstanceGpuData.m_ibStride = giMesh.m_nIndexStride;
+            if (giMesh.m_nIndexStride > 0)
+            {
+                meshInstanceGpuData.m_ibIndex = giMesh.m_indexBuffer->GetOrAddVBIBBindlessIndex();
+            }
+            meshInstanceGpuData.m_vbIndex = giMesh.m_positionVB->GetOrAddVBIBBindlessIndex();
+        }
+    }
+
     void hwrtl::gi::PrePareLightMapRayTracingPass()
     {
         CGIBaker::GetDeviceCommand()->OpenCmdList();
@@ -506,6 +491,10 @@ namespace gi
         pGiBaker->m_pTLAS = CGIBaker::GetDeviceCommand()->BuildTopAccelerationStructure(inoutGpuBlasDataArray);
 
         pGiBaker->pRtSceneLight = CGIBaker::GetDeviceCommand()->CreateBuffer(pGiBaker->m_aRayTracingLights.data(), sizeof(SRayTracingLight) * pGiBaker->m_aRayTracingLights.size(), sizeof(SRayTracingLight), EBufferUsage::USAGE_Structure);
+
+        std::vector<SMeshInstanceGpuData> sceneInstanceData;
+        AllocRtSceneGpuInstanceData(sceneInstanceData);
+        pGiBaker->pRtSceneInstanceGpuData = CGIBaker::GetDeviceCommand()->CreateBuffer(sceneInstanceData.data(), sizeof(SMeshInstanceGpuData) * sceneInstanceData.size(), sizeof(SMeshInstanceGpuData), EBufferUsage::USAGE_Structure);
 
         SRtGlobalConstantBuffer rtGloablCB;
         rtGloablCB.m_nRtSceneLightCount = pGiBaker->m_aRayTracingLights.size();
@@ -533,7 +522,7 @@ namespace gi
             shaderDefines.m_defineValue = std::wstring(L"0");
         }
         
-        SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 4,2,1,0 } ,&shaderDefines,1 };
+        SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 5,2,1,0 } ,&shaderDefines,1};
         pGiBaker->m_pRayTracingPSO = CGIBaker::GetDeviceCommand()->CreateRTPipelineStateAndShaderTable(rtPsoCreateDesc);
 
         CGIBaker::GetDeviceCommand()->CloseAndExecuteCmdList();
@@ -556,6 +545,7 @@ namespace gi
             CGIBaker::GetRayTracingContext()->SetShaderSRV(atlas.m_hPosTexture, 1);
             CGIBaker::GetRayTracingContext()->SetShaderSRV(atlas.m_hNormalTexture, 2);
             CGIBaker::GetRayTracingContext()->SetShaderSRV(pGiBaker->pRtSceneLight, 3);
+            CGIBaker::GetRayTracingContext()->SetShaderSRV(pGiBaker->pRtSceneInstanceGpuData, 4);
             CGIBaker::GetRayTracingContext()->DispatchRayTracicing(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
         }

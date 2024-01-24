@@ -49,14 +49,21 @@ SOFTWARE.
 
 namespace hwrtl
 {
-#define DEFINE_ENUM_FLAG_OPERATORS(ENUMTYPE)\
-inline constexpr ENUMTYPE operator | (ENUMTYPE a, ENUMTYPE b)  { return ENUMTYPE(((uint32_t)a) | ((uint32_t)b)); } \
-inline ENUMTYPE &operator |= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((uint32_t &)a) |= ((uint32_t)b)); } \
-inline constexpr ENUMTYPE operator & (ENUMTYPE a, ENUMTYPE b)  { return ENUMTYPE(((uint32_t)a) & ((uint32_t)b)); } \
-inline ENUMTYPE &operator &= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((uint32_t &)a) &= ((uint32_t)b)); } \
-inline constexpr ENUMTYPE operator ~ (ENUMTYPE a)  { return ENUMTYPE(~((uint32_t)a)); } \
-inline constexpr ENUMTYPE operator ^ (ENUMTYPE a, ENUMTYPE b)  { return ENUMTYPE(((uint32_t)a) ^ ((uint32_t)b)); } \
-inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((uint32_t &)a) ^= ((uint32_t)b)); } \
+#define DEFINE_ENUM_FLAG_OPERATORS(ENUMTYPE) \
+	inline           ENUMTYPE& operator|=(ENUMTYPE& a, ENUMTYPE b) { return a = (ENUMTYPE)((__underlying_type(ENUMTYPE))a | (__underlying_type(ENUMTYPE))b); } \
+	inline           ENUMTYPE& operator&=(ENUMTYPE& a, ENUMTYPE b) { return a = (ENUMTYPE)((__underlying_type(ENUMTYPE))a & (__underlying_type(ENUMTYPE))b); } \
+	inline           ENUMTYPE& operator^=(ENUMTYPE& a, ENUMTYPE b) { return a = (ENUMTYPE)((__underlying_type(ENUMTYPE))a ^ (__underlying_type(ENUMTYPE))b); } \
+	inline constexpr ENUMTYPE  operator| (ENUMTYPE  a, ENUMTYPE b) { return (ENUMTYPE)((__underlying_type(ENUMTYPE))a | (__underlying_type(ENUMTYPE))b); } \
+	inline constexpr ENUMTYPE  operator& (ENUMTYPE  a, ENUMTYPE b) { return (ENUMTYPE)((__underlying_type(ENUMTYPE))a & (__underlying_type(ENUMTYPE))b); } \
+	inline constexpr ENUMTYPE  operator^ (ENUMTYPE  a, ENUMTYPE b) { return (ENUMTYPE)((__underlying_type(ENUMTYPE))a ^ (__underlying_type(ENUMTYPE))b); } \
+	inline constexpr bool  operator! (ENUMTYPE  E)             { return !(__underlying_type(ENUMTYPE))E; } \
+	inline constexpr ENUMTYPE  operator~ (ENUMTYPE  E)             { return (ENUMTYPE)~(__underlying_type(ENUMTYPE))E; }
+
+	template<typename ENUMTYPE>
+	constexpr bool EnumHasAnyFlags(ENUMTYPE enumValue, ENUMTYPE flag)
+	{
+		return ((__underlying_type(ENUMTYPE))enumValue & (__underlying_type(ENUMTYPE))flag) != 0;
+	}
 
 	template<typename T,int N, typename R>
 	struct TVecN
@@ -235,12 +242,13 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(ETexUsage);
 
-	enum class EBufferUsage
+	enum class EBufferUsage : uint32_t
 	{
-		USAGE_VB = 0, // vertex buffer
-		USAGE_IB, // index buffer
-		USAGE_CB, // constant buffer
-		USAGE_Structure, // structure buffer
+		USAGE_VB = (1 << 0) , // vertex buffer
+		USAGE_IB = (1 << 1), // index buffer
+		USAGE_CB = (1 << 2), // constant buffer
+		USAGE_Structure = (1 << 3), // structure buffer
+		USAGE_BYTE_ADDRESS = (1 << 4)  // byte address buffer for bindless vb ib
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(EBufferUsage);
 
@@ -301,7 +309,6 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	public:
 		CTexture2D() {}
 		virtual ~CTexture2D() {}
-		virtual uint32_t GetBindlessIndex() = 0;
 	};
 
 	class CBuffer
@@ -309,6 +316,7 @@ inline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b)  { return (ENUMTYPE &)(((
 	public:
 		CBuffer() {}
 		virtual ~CBuffer() {}
+		virtual uint32_t GetOrAddVBIBBindlessIndex() = 0;
 	};
 
 	class CBottomLevelAccelerationStructure
