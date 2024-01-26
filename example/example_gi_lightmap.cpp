@@ -214,13 +214,13 @@ void CreateBackPlaneMesh(uint32_t planeVertexCount, uint32_t planeLightMapSizeX,
         normals[index] = Vec3(0, -1, 0);
     }
 
-    planeGeoPositions[0] = Vec3(-4, +4, 12); planeGeoLightMapUV[0] = Vec2(0.0, 0.0);
-    planeGeoPositions[1] = Vec3(+4, +4, 12); planeGeoLightMapUV[1] = Vec2(1.0, 0.0);
-    planeGeoPositions[2] = Vec3(+4, +4, 0); planeGeoLightMapUV[2] = Vec2(1.0, 1.0);
-
-    planeGeoPositions[3] = planeGeoPositions[0]; planeGeoLightMapUV[3] = planeGeoLightMapUV[0];
-    planeGeoPositions[4] = planeGeoPositions[2]; planeGeoLightMapUV[4] = planeGeoLightMapUV[2];
-    planeGeoPositions[5] = Vec3(-4, +4, 0); planeGeoLightMapUV[5] = Vec2(0.0, 1.0);
+   planeGeoPositions[0] = Vec3(-4, +4, 12); planeGeoLightMapUV[0] = Vec2(0.0, 0.0);
+   planeGeoPositions[1] = Vec3(+4, +4, 12); planeGeoLightMapUV[1] = Vec2(1.0, 0.0);
+   planeGeoPositions[2] = Vec3(+4, +4, 0); planeGeoLightMapUV[2] = Vec2(1.0, 1.0);
+   
+   planeGeoPositions[3] = planeGeoPositions[0]; planeGeoLightMapUV[3] = planeGeoLightMapUV[0];
+   planeGeoPositions[4] = planeGeoPositions[2]; planeGeoLightMapUV[4] = planeGeoLightMapUV[2];
+   planeGeoPositions[5] = Vec3(-4, +4, 0); planeGeoLightMapUV[5] = Vec2(0.0, 1.0);
 }
 
 std::vector<Vec3>boxGeoPositions;
@@ -265,6 +265,7 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
 
     SBakeMeshDesc leftBox;
     leftBox.m_meshInstanceInfo = SMeshInstanceInfo();
+    leftBox.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
     leftBox.m_pPositionData = boxGeoPositions.data();
     leftBox.m_pLightMapUVData = boxGeoLightMapUV.data();
     leftBox.m_pNormalData = boxGeoNormals.data();
@@ -276,9 +277,10 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     leftBox.m_meshInstanceInfo.m_transform[0][3] = -2;
     leftBox.m_meshInstanceInfo.m_transform[1][3] = 2;
     leftBox.m_meshInstanceInfo.m_transform[2][3] = 6;
-
+    
     SBakeMeshDesc rightBox = leftBox;
     rightBox.m_meshInstanceInfo = SMeshInstanceInfo();
+    rightBox.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
     //scale
     rightBox.m_meshInstanceInfo.m_transform[2][2] = 2; // size z = 2 * 2
     //translate (2,-2,2)
@@ -288,6 +290,7 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
 
     SBakeMeshDesc bottomPlane;
     bottomPlane.m_meshInstanceInfo = SMeshInstanceInfo();
+    bottomPlane.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
     bottomPlane.m_pPositionData = bottomPlaneGeoPositions.data();
     bottomPlane.m_pLightMapUVData = bottomPlaneGeoLightMapUV.data();
     bottomPlane.m_pNormalData = bottomPlaneGeoNormals.data();
@@ -296,6 +299,7 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
 
     SBakeMeshDesc topPlane;
     topPlane.m_meshInstanceInfo = SMeshInstanceInfo();
+    topPlane.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
     topPlane.m_pPositionData = topPlaneGeoPositions.data();
     topPlane.m_pLightMapUVData = topPlaneGeoLightMapUV.data();
     topPlane.m_pNormalData = topPlaneGeoNormals.data();
@@ -304,6 +308,7 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
 
     SBakeMeshDesc leftPlane;
     leftPlane.m_meshInstanceInfo = SMeshInstanceInfo();
+    leftPlane.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
     leftPlane.m_pPositionData = leftPlaneGeoPositions.data();
     leftPlane.m_pLightMapUVData = leftPlaneGeoLightMapUV.data();
     leftPlane.m_pNormalData = leftPlaneGeoNormals.data();
@@ -312,6 +317,7 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
 
     SBakeMeshDesc rightPlane;
     rightPlane.m_meshInstanceInfo = SMeshInstanceInfo();
+    rightPlane.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
     rightPlane.m_pPositionData = rightPlaneGeoPositions.data();
     rightPlane.m_pLightMapUVData = rightPlaneGeoLightMapUV.data();
     rightPlane.m_pNormalData = rightPlaneGeoNormals.data();
@@ -320,6 +326,7 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
 
     SBakeMeshDesc backPlane;
     backPlane.m_meshInstanceInfo = SMeshInstanceInfo();
+    backPlane.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
     backPlane.m_pPositionData = backPlaneGeoPositions.data();
     backPlane.m_pLightMapUVData = backPlaneGeoLightMapUV.data();
     backPlane.m_pNormalData = backPlaneGeoNormals.data();
@@ -372,7 +379,7 @@ int main()
 
         SBakeConfig bakeConfig;
         bakeConfig.m_maxAtlasSize = 1024;
-        bakeConfig.m_bDebugRayTracing = false;
+        bakeConfig.m_bDebugRayTracing = true;
         bakeConfig.m_bAddVisualizePass = true;
         InitGIBaker(bakeConfig);
         AddBakeMeshsAndCreateVB(sceneMesh);
@@ -382,13 +389,13 @@ int main()
         Vec3 lightIntensity(intensity, intensity, intensity);
         AddDirectionalLight(lightIntensity, Vec3(-1, -1, 1), false);
 
-        Vec3 spherlight1Intensity(intensity * 0.5, intensity * 0.15, intensity * 0.15);
+        Vec3 spherlight1Intensity(intensity * 0.8, intensity * 0.3, intensity * 0.3);
         AddSphereLight(spherlight1Intensity, Vec3(-3.5, 3.5, 11.5), false, 5.0, 1.0);
 
-        Vec3 spherlight2Intensity(intensity * 0.15, intensity * 0.5, intensity * 0.5);
+        Vec3 spherlight2Intensity(intensity * 0.3, intensity * 0.8, intensity * 0.8);
         AddSphereLight(spherlight2Intensity, Vec3(-3.0, -3.0, 0.5), false, 5.0, 1.0);
 
-        Vec3 spherlight3Intensity(intensity * 0.5, intensity * 0.5, intensity * 0.15);
+        Vec3 spherlight3Intensity(intensity * 0.8, intensity * 0.8, intensity * 0.3);
         AddSphereLight(spherlight3Intensity, Vec3(2.5, 0, 6.5), false, 5.0, 1.0);
 
         PrePareLightMapGBufferPass();

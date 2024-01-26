@@ -146,7 +146,8 @@ namespace hwrtl
     class CDXPassDescManager
     {
     public:
-        void Init(ID3D12Device5Ptr pDevice);
+        void Init(ID3D12Device5Ptr pDevice, bool bShaderVisiable);
+        uint32_t GetCurrentHandleNum();
         D3D12_CPU_DESCRIPTOR_HANDLE GetCPUHandle(uint32_t index);
         D3D12_GPU_DESCRIPTOR_HANDLE GetGPUHandle(uint32_t index);
 
@@ -270,9 +271,21 @@ namespace hwrtl
         ID3D12ResourcePtr m_pblas;
     };
 
+    struct SMeshInstanceGpuData
+    {
+        Matrix44 m_worldTM;
+
+        uint32_t m_ibStride;
+        uint32_t m_ibIndex;
+        uint32_t m_vbIndex;
+        uint32_t unused;
+    };
+
     class CDxTopLevelAccelerationStructure : public CTopLevelAccelerationStructure
     {
     public:
+        std::vector<SMeshInstanceGpuData> m_sceneInstanceData;
+        std::shared_ptr<CBuffer> m_instanceGpuData;
         ID3D12ResourcePtr m_ptlas;
         CDx12View m_srv;
     };
@@ -358,15 +371,24 @@ namespace hwrtl
     private:
         void ApplyPipelineStata();
         void ApplySlotViews(ESlotType slotType);
+        void ApplyBindlessTable();
         D3D12_DISPATCH_RAYS_DESC CreateRayTracingDesc(uint32_t width, uint32_t height);
         void ResetContext();
     private:
         CDXPassDescManager m_rtPassDescManager;
 
+        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>m_bindlessHandles;
+        uint32_t m_bindlessNum = 0;
+        bool m_bBindlessTableDirty = false;
+
+        D3D12_GPU_VIRTUAL_ADDRESS m_gpuInstanceDataPtr;
+
         D3D12_CPU_DESCRIPTOR_HANDLE m_viewHandles[4][nHandlePerView];
         bool m_bViewTableDirty[4];
         bool m_bPipelineStateDirty;
+
         uint32_t m_bindlessRootTableIndex;
+        uint32_t m_gpuInstanceDataRootTableIndex;
 
         ID3D12RootSignaturePtr m_pGlobalRootSig;
         ID3D12StateObjectPtr m_pRtPipelineState;
@@ -909,7 +931,7 @@ namespace hwrtl
                 }
             }
 
-            rootParams.resize(totalRootNum + 1);
+            rootParams.resize(totalRootNum + 2); // space 1 for bindless root table, space 2 for gpu instance buffer
             descRanges.resize(totalRootNum);
 
             uint32_t rootTabbleIndex = 0;
@@ -935,7 +957,7 @@ namespace hwrtl
                     rootTabbleIndex++;
                 }
             }
-
+            
             D3D12_DESCRIPTOR_RANGE1 bindlessDescRange;
             bindlessDescRange.BaseShaderRegister = 0;
             bindlessDescRange.NumDescriptors = -1;
@@ -947,6 +969,12 @@ namespace hwrtl
             rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
             rootParams[rootTabbleIndex].DescriptorTable.NumDescriptorRanges = 1;
             rootParams[rootTabbleIndex].DescriptorTable.pDescriptorRanges = &bindlessDescRange;
+            rootTabbleIndex++;
+
+            rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+            rootParams[rootTabbleIndex].Descriptor.ShaderRegister = 0;
+            rootParams[rootTabbleIndex].Descriptor.RegisterSpace = 2;
+            rootParams[rootTabbleIndex].Descriptor.Flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE;
 
             D3D12_ROOT_SIGNATURE_DESC1 rootSigDesc = {};
             rootSigDesc.NumParameters = rootParams.size();
@@ -1148,11 +1176,11 @@ namespace hwrtl
     * CDXPassDescManager
     ***************************************************************************/
 
-    void CDXPassDescManager::Init(ID3D12Device5Ptr pDevice)
+    void CDXPassDescManager::Init(ID3D12Device5Ptr pDevice, bool bShaderVisiable)
     {
         m_maxDescNum = 1024;
 
-        m_pDescHeap = Dx12CreateDescriptorHeap(pDevice, m_maxDescNum, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true);
+        m_pDescHeap = Dx12CreateDescriptorHeap(pDevice, m_maxDescNum, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, bShaderVisiable);
 
         m_hCpuBegin = m_pDescHeap->GetCPUDescriptorHandleForHeapStart();
         m_hGpuBegin = m_pDescHeap->GetGPUDescriptorHandleForHeapStart();
@@ -1169,6 +1197,11 @@ namespace hwrtl
     D3D12_GPU_DESCRIPTOR_HANDLE CDXPassDescManager::GetGPUHandle(uint32_t index)
     {
         return D3D12_GPU_DESCRIPTOR_HANDLE{ m_hGpuBegin.ptr + static_cast<UINT64>(index * m_nElemSize) };
+    }
+
+    uint32_t CDXPassDescManager::GetCurrentHandleNum()
+    {
+        return m_nCurrentStartSlotIndex;
     }
 
     uint32_t CDXPassDescManager::GetAndAddCurrentPassSlotStart(uint32_t numSlotUsed)
@@ -1214,7 +1247,7 @@ namespace hwrtl
         m_rtvDescManager.Init(m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, false);
         m_csuDescManager.Init(m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, false);
         m_dsvDescManager.Init(m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, false);
-        m_bindlessDescManager.Init(m_pDevice);
+        m_bindlessDescManager.Init(m_pDevice, false);
 
         ThrowIfFailed(m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_pCmdAllocator)));
         ThrowIfFailed(m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_pCmdAllocator, nullptr, IID_PPV_ARGS(&m_pCmdList)));
@@ -1903,7 +1936,28 @@ namespace hwrtl
             {
                 for (uint32_t indexInstance = 0; indexInstance < gpuMeshData[indexMesh]->instanes.size(); indexInstance++)
                 {
-                    const SMeshInstanceInfo& meshInstanceInfo = gpuMeshData[indexMesh]->instanes[indexInstance];
+                    auto& gpuMeshDataIns = gpuMeshData[indexMesh];
+                    const SMeshInstanceInfo& meshInstanceInfo = gpuMeshDataIns->instanes[indexInstance];
+                    
+                    SMeshInstanceGpuData meshInstanceGpuData;
+                    {
+                        meshInstanceGpuData.m_worldTM.SetIdentity();
+                        for (uint32_t i = 0; i < 4; i++)
+                        {
+                            for (uint32_t j = 0; j < 3; j++)
+                            {
+                                meshInstanceGpuData.m_worldTM.m[i][j] = gpuMeshDataIns->instanes[indexInstance].m_transform[j][i];
+                            }
+                        }
+                        meshInstanceGpuData.m_ibStride = gpuMeshDataIns->m_nIndexStride;
+                        if (gpuMeshDataIns->m_nIndexStride > 0)
+                        {
+                            meshInstanceGpuData.m_ibIndex = gpuMeshDataIns->m_pIndexBuffer->GetOrAddVBIBBindlessIndex();
+                        }
+                        meshInstanceGpuData.m_vbIndex = gpuMeshDataIns->m_pVertexBuffer->GetOrAddVBIBBindlessIndex();
+                    }
+
+                    dxTLAS->m_sceneInstanceData.push_back(meshInstanceGpuData);
                     instanceDescs[indexMesh].InstanceID = 0;
                     instanceDescs[indexMesh].InstanceContributionToHitGroupIndex = 0;
                     instanceDescs[indexMesh].Flags = Dx12ConvertInstanceFlag(meshInstanceInfo.m_instanceFlag);
@@ -1931,6 +1985,9 @@ namespace hwrtl
             pCmdList->ResourceBarrier(1, &uavBarrier);
 
             dxTLAS->m_ptlas = pResult;
+
+            dxTLAS->m_instanceGpuData = CreateBuffer(dxTLAS->m_sceneInstanceData.data(), sizeof(SMeshInstanceGpuData) * dxTLAS->m_sceneInstanceData.size(), sizeof(SMeshInstanceGpuData), EBufferUsage::USAGE_Structure);
+
             Dx12CloseAndExecuteCmdListInternal();
             Dx12WaitGPUCmdListFinishInternal();
 
@@ -1978,7 +2035,7 @@ namespace hwrtl
     CDx12RayTracingContext::CDx12RayTracingContext()
     {
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
-        m_rtPassDescManager.Init(pDevice);
+        m_rtPassDescManager.Init(pDevice, true);
         memset(m_viewHandles, 0, 4 * nHandlePerView * sizeof(D3D12_CPU_DESCRIPTOR_HANDLE));
     }
 
@@ -1987,7 +2044,7 @@ namespace hwrtl
         Dx12OpenCmdListInternal();
 
         auto pCommandList = pDXDevice->m_pCmdList;
-        ID3D12DescriptorHeap* heaps[] = { m_rtPassDescManager.GetHeapPtr() };
+        ID3D12DescriptorHeap* heaps[] = { m_rtPassDescManager.GetHeapPtr()};
         pCommandList->SetDescriptorHeaps(1, heaps);
 
         ResetContext();
@@ -2022,6 +2079,7 @@ namespace hwrtl
 
         m_bPipelineStateDirty = true;
         m_bindlessRootTableIndex = dxRayTracingPSO->m_bindlessRootTableIndex;
+        m_gpuInstanceDataRootTableIndex = m_bindlessRootTableIndex + 1;
     }
 
     void CDx12RayTracingContext::SetTLAS(std::shared_ptr<CTopLevelAccelerationStructure> tlas, uint32_t bindIndex)
@@ -2029,6 +2087,30 @@ namespace hwrtl
         CDxTopLevelAccelerationStructure* pDxTex2D = static_cast<CDxTopLevelAccelerationStructure*>(tlas.get());
         m_viewHandles[uint32_t(ESlotType::ST_T)][bindIndex] = pDxTex2D->m_srv.m_pCpuDescHandle;
         m_bViewTableDirty[uint32_t(ESlotType::ST_T)] = true;
+
+       
+        D3D12_CPU_DESCRIPTOR_HANDLE m_bindlessHandlesStart = pDXDevice->m_bindlessDescManager.GetCPUHandle(0);
+        if (m_bindlessHandles.size() == 0)
+        {
+            m_bBindlessTableDirty = true;
+        }
+
+        if (m_bindlessHandles.size() > 0 && m_bindlessHandles[0].ptr != m_bindlessHandlesStart.ptr)
+        {
+            m_bBindlessTableDirty = true;
+        }
+
+        if (m_bBindlessTableDirty)
+        {
+            m_bindlessNum = pDXDevice->m_bindlessDescManager.GetCurrentHandleNum();
+            m_bindlessHandles.resize(m_bindlessNum);
+            for (uint32_t index = 0; index < m_bindlessNum; index++)
+            {
+                m_bindlessHandles[index] = pDXDevice->m_bindlessDescManager.GetCPUHandle(index);
+            }
+        }
+
+        m_gpuInstanceDataPtr = static_cast<CDxBuffer*>(pDxTex2D->m_instanceGpuData.get())->m_dxResource.m_pResource->GetGPUVirtualAddress();
     }
 
     void CDx12RayTracingContext::SetShaderSRV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex)
@@ -2077,7 +2159,10 @@ namespace hwrtl
         }
 
         // bindless binding
-        pCommandList->SetComputeRootDescriptorTable(m_bindlessRootTableIndex, pDXDevice->m_bindlessDescManager.GetGPUHandle(0));
+        ApplyBindlessTable();
+
+        assert((m_gpuInstanceDataPtr != 0) && "you must set gpu instance data handle");
+        pCommandList->SetComputeRootShaderResourceView(m_gpuInstanceDataRootTableIndex, m_gpuInstanceDataPtr);
 
         pDXDevice->dxBarrierManager.FlushResourceBarrier(pCommandList);
 
@@ -2116,8 +2201,22 @@ namespace hwrtl
 
             m_bViewTableDirty[slotIndex] = false;
         }
+    }
 
+    void hwrtl::CDx12RayTracingContext::ApplyBindlessTable()
+    {
+        if (m_bBindlessTableDirty == true)
+        {
+            auto pCommandList = pDXDevice->m_pCmdList;
+            uint32_t startIndex = m_rtPassDescManager.GetAndAddCurrentPassSlotStart(m_bindlessNum);
+            D3D12_CPU_DESCRIPTOR_HANDLE destCPUHandle = m_rtPassDescManager.GetCPUHandle(startIndex);
+            pDXDevice->m_pDevice->CopyDescriptors(1, &destCPUHandle, &m_bindlessNum, m_bindlessNum, m_bindlessHandles.data(), nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle = m_rtPassDescManager.GetGPUHandle(startIndex);
+            pCommandList->SetComputeRootDescriptorTable(m_bindlessRootTableIndex, gpuDescHandle);
+
+            m_bBindlessTableDirty = false;
+        }
     }
 
     D3D12_DISPATCH_RAYS_DESC CDx12RayTracingContext::CreateRayTracingDesc(uint32_t width, uint32_t height)
@@ -2154,8 +2253,9 @@ namespace hwrtl
 
     void CDx12RayTracingContext::ResetContext()
     {
-        m_bViewTableDirty[0] = m_bViewTableDirty[1] = m_bViewTableDirty[2] = m_bViewTableDirty[3] = false;
-        m_bPipelineStateDirty = false;
+        m_bViewTableDirty[0] = m_bViewTableDirty[1] = m_bViewTableDirty[2] = m_bViewTableDirty[3] = true;
+        m_bPipelineStateDirty = true;
+        m_bBindlessTableDirty = true;
     }
 
     /***************************************************************************
@@ -2165,7 +2265,7 @@ namespace hwrtl
     CDxGraphicsContext::CDxGraphicsContext()
     {
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
-        m_rsPassDescManager.Init(pDevice);
+        m_rsPassDescManager.Init(pDevice, true);
         memset(m_viewHandles, 0, 4 * nHandlePerView * sizeof(D3D12_CPU_DESCRIPTOR_HANDLE));
     }
 
@@ -2174,7 +2274,7 @@ namespace hwrtl
         Dx12OpenCmdListInternal();
 
         auto pCommandList = pDXDevice->m_pCmdList;
-        ID3D12DescriptorHeap* heaps[] = { m_rsPassDescManager.GetHeapPtr() };
+        ID3D12DescriptorHeap* heaps[] = { m_rsPassDescManager.GetHeapPtr()};
         pCommandList->SetDescriptorHeaps(1, heaps);
 
         ResetContext();

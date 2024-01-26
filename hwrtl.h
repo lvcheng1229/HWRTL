@@ -350,9 +350,11 @@ namespace hwrtl
 	struct SGpuBlasData
 	{
 		uint32_t m_nVertexCount = 0;
+		uint32_t m_nIndexStride = 0;
 		std::vector<SMeshInstanceInfo>instanes;
 
 		std::shared_ptr<CBuffer>m_pVertexBuffer;
+		std::shared_ptr<CBuffer>m_pIndexBuffer;
 		std::shared_ptr<CBottomLevelAccelerationStructure>m_pBLAS;
 	};
 

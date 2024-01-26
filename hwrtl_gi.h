@@ -29,7 +29,8 @@ SOFTWARE.
 // 
 // Custom denoiser usage:
 //		
-// 
+// Notice:
+//		1. we use right-handed coordinate system, so the front face of the triangle is counter-clockwise
 // TODO:
 //		1. instance mesh		
 // 

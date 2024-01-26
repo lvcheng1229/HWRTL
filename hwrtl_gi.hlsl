@@ -168,6 +168,7 @@ struct SMeshInstanceGpuData
 };
 
 ByteAddressBuffer bindlessByteAddressBuffer[] : register(t0, space1);
+StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t0, space2);
 
 cbuffer CRtGlobalConstantBuffer : register(b0)
 {
@@ -181,7 +182,7 @@ RaytracingAccelerationStructure rtScene : register(t0);
 Texture2D<float4> rtWorldPosition : register(t1);
 Texture2D<float4> rtWorldNormal : register(t2);
 StructuredBuffer<SRayTracingLight> rtSceneLights : register(t3);
-StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t4);
+
 
 RWTexture2D<float4> encodedIrradianceAndSubLuma1 : register(u0);
 RWTexture2D<float4> shDirectionalityAndSubLuma2 : register(u1);
@@ -197,7 +198,9 @@ struct SMaterialClosestHitPayload
     float3 m_worldPosition;
     float3 m_worldNormal;
 
-    //float2 m_pixelCoord;
+#if RT_DEBUG_OUTPUT
+    float4 m_debugPayload;
+#endif
 
     float m_vHiTt;
     uint m_eFlag; //e.g. front face flag
@@ -706,16 +709,7 @@ SMaterialClosestHitPayload TraceLightRay(RayDesc ray, bool bLastBounce, inout fl
         return materialCHSPayload;
     }
 
-    TraceRay(
-		rtScene, // AccelerationStructure
-		RAY_FLAG_FORCE_OPAQUE,
-		RAY_TRACING_MASK_OPAQUE, 
-		RT_MATERIAL_SHADER_INDEX, // RayContributionToHitGroupIndex
-		1, // MultiplierForGeometryContributionToShaderIndex
-		0, // MissShaderIndex
-		ray, // RayDesc
-		materialCHSPayload // Payload
-	);
+    TraceRay(rtScene, RAY_FLAG_FORCE_OPAQUE, RAY_TRACING_MASK_OPAQUE, RT_MATERIAL_SHADER_INDEX, 1, 0, ray, materialCHSPayload);
 
     for(uint index = 0; index < m_nRtSceneLightCount; index++)
     {
@@ -723,6 +717,7 @@ SMaterialClosestHitPayload TraceLightRay(RayDesc ray, bool bLastBounce, inout fl
         float3 lightRadiance = TraceLight(ray,index).m_radiance;
         radiance += pathThroughput * lightRadiance;
     }
+
     return materialCHSPayload;
 }
 
@@ -783,8 +778,7 @@ void DoRayTracing(
     // pdf(xg) = lightPickPdf * lightTraceResult.m_pdf
     // w(xg) = pdf(xg) / ( pdf(xf) + pdf(xg) ) = mis(materialSample.m_pdf,lightPickPdf * lightTraceResult.m_pdf)
 
-    
-    for(int bounce = 0; bounce <= 0; bounce++)
+    for(int bounce = 0; bounce <= 1; bounce++)
     {
         const bool bIsCameraRay = bounce == 0;
         const bool bIsLastBounce = bounce == maxBounces;
@@ -811,6 +805,18 @@ void DoRayTracing(
             break;
         }
 
+
+#if RT_DEBUG_OUTPUT
+        if(bounce == 1)
+        {
+            if((rtRaylod.m_eFlag & RT_PAYLOAD_FLAG_FRONT_FACE) != 0)
+            {
+                rtDebugOutput = float4(abs(rtRaylod.m_debugPayload.xyz),1.0);
+            }
+        }
+
+#endif
+
         if((rtRaylod.m_eFlag & RT_PAYLOAD_FLAG_FRONT_FACE) == 0)
         {
             bIsValidSample = false;
@@ -820,7 +826,6 @@ void DoRayTracing(
         // x: light sample y: light direction sample z: light direction sample w: russian roulette
         float4 randomSample = GetRandomSampleFloat4(randomSequence);
 
-        // step1 : Sample Light, Choose a [LIGHT] randomly
         float vLightPickingCdfPreSum = 0.0;
         float3 worldPosition = rtRaylod.m_worldPosition;
         float3 worldNormal = rtRaylod.m_worldNormal;
@@ -832,7 +837,7 @@ void DoRayTracing(
         }
 
         // step1: Sample Light, Choose a [LIGHT] randomly
-        if(debugsample == 1)
+        if(debugSample != 1)
         {
             if (vLightPickingCdfPreSum > 0)
             {
@@ -842,9 +847,6 @@ void DoRayTracing(
                 SelectLight(randomSample.x * vLightPickingCdfPreSum,m_nRtSceneLightCount,aLightPickingCdf,nSelectedLightIndex,vSlectedLightPdf);
                 vSlectedLightPdf /= vLightPickingCdfPreSum;
 
-#if RT_DEBUG_OUTPUT
-                rtDebugOutput = float4(aLightPickingCdf[0],aLightPickingCdf[1],randomSample.x * vLightPickingCdfPreSum,1);
-#endif
                 SLightSample lightSample = SampleLight(nSelectedLightIndex,randomSample.yz,worldPosition,worldNormal);
                 lightSample.m_radianceOverPdf /= vSlectedLightPdf;
                 lightSample.m_pdf *= vSlectedLightPdf;
@@ -876,11 +878,8 @@ void DoRayTracing(
                     if (any(lightSample.m_radianceOverPdf > 0))
                     {   
                         SMaterialEval materialEval = EvalMaterial(lightSample.m_direction,rtRaylod);
-
-                        // lambert Li * rho(basecolor) * NoL / PI;
-                        float3 lightContrib = pathThroughput * lightSample.m_radianceOverPdf * materialEval.m_weight * materialEval.m_pdf;
                         
-                        //mis weight
+                        float3 lightContrib = pathThroughput * lightSample.m_radianceOverPdf * materialEval.m_weight * materialEval.m_pdf;
                         lightContrib *= MISWeightRobust(lightSample.m_pdf,materialEval.m_pdf);
                         
                         if (bounce > 0)
@@ -902,7 +901,7 @@ void DoRayTracing(
         }
 
         // step2: Sample Material, Choose a [LIGHT DIRECTION] based on material randomly
-        if(debugSample == 2)
+        if(debugSample != 2)
         {
             SMaterialSample materialSample = SampleMaterial(rtRaylod,randomSample);
             if(materialSample.m_pdf < 0.0 || asuint(materialSample.m_pdf) > 0x7F800000)
@@ -939,7 +938,11 @@ void DoRayTracing(
             ray.TMin = 0.0f;
             ray.TMax = POSITIVE_INFINITY;
 
-            ray.Origin += abs(rtRaylod.m_worldPosition) * 0.001f * rtRaylod.m_worldNormal;
+            ray.Origin += (abs(rtRaylod.m_worldPosition) + 0.5) * 0.001f * rtRaylod.m_worldNormal;
+
+#if RT_DEBUG_OUTPUT
+            ray.Direction = float3(0,0,1);
+#endif
 
             if(bounce == 0)
             {
@@ -969,16 +972,7 @@ void DoRayTracing(
                         RayDesc shadowRay = ray;
                         shadowRay.TMax = lightTraceResult.m_hitT;
 
-                        TraceRay(
-	                        	rtScene, // AccelerationStructure
-	                        	RAY_FLAG_FORCE_OPAQUE,
-	                        	RAY_TRACING_MASK_OPAQUE, 
-	                        	RT_SHADOW_SHADER_INDEX, // RayContributionToHitGroupIndex
-	                        	1, // MultiplierForGeometryContributionToShaderIndex
-	                        	0, // MissShaderIndex
-	                        	shadowRay, // RayDesc
-	                        	shadowRayPaylod // Payload
-	                    );
+                        TraceRay(rtScene, RAY_FLAG_FORCE_OPAQUE, RAY_TRACING_MASK_OPAQUE, RT_SHADOW_SHADER_INDEX, 1, 0, shadowRay, shadowRayPaylod);
 
                         if(shadowRayPaylod.m_vHiTt <= 0)
                         {
@@ -1040,7 +1034,7 @@ void LightMapRayTracingRayGen()
 
         directionalLightRadianceValue,
         directionalLightRadianceDirection);
-    
+
     if (any(isnan(radianceValue)) || any(radianceValue < 0) || any(isinf(radianceValue)))
 	{
 		bIsValidSample = false;
@@ -1123,6 +1117,10 @@ void MaterialClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTra
     float3 localVertex1 = asfloat(bindlessByteAddressBuffer[vbIndex].Load3(indices.y * 24));
     float3 localVertex2 = asfloat(bindlessByteAddressBuffer[vbIndex].Load3(indices.z * 24));
 
+#if RT_DEBUG_OUTPUT
+    payload.m_debugPayload = float4(localVertex0 + float3(12.0,12.0,12.0),1.0);
+#endif
+
     float3 wolrdPosition0 =  mul(worldTM, float4(localVertex0,1.0)).xyz;
     float3 wolrdPosition1 =  mul(worldTM, float4(localVertex1,1.0)).xyz;
     float3 wolrdPosition2 =  mul(worldTM, float4(localVertex2,1.0)).xyz;
@@ -1145,6 +1143,10 @@ void MaterialClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTra
     if (HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE)
     {
         payload.m_eFlag = RT_PAYLOAD_FLAG_FRONT_FACE;
+    }
+    else
+    {
+        payload.m_eFlag = 0;
     }
 
     //hit t
@@ -1228,6 +1230,7 @@ SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
     float4 SH = lightmap1.xyzw;
     float Directionality = dot(SH,float4(wordlNormal.yzx,1.0));
 
-    output.giResult = float4(irradiance + float3(IN.lightMapUV.xy , IN.lightMapUV.x + IN.lightMapUV.y) * 0.05f /*test code*/, 1.0);
+    //output.giResult = float4(irradiance + float3(IN.lightMapUV.xy , IN.lightMapUV.x + IN.lightMapUV.y) * 0.05f /*test code*/, 1.0);
+    output.giResult = float4(lightmap0.rgb, 1.0);
     return output;
 }

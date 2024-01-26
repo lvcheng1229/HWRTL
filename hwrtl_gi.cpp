@@ -177,16 +177,6 @@ namespace gi
     };
     static_assert(sizeof(SRtGlobalConstantBuffer) == 256, "sizeof(SRtGlobalConstantBuffer) == 256");
 
-    struct SMeshInstanceGpuData
-    {
-        Matrix44 m_worldTM;
-
-        uint32_t m_ibStride;
-        uint32_t m_ibIndex;
-        uint32_t m_vbIndex;
-        uint32_t unused;
-    };
-
     class CHWRTLLightMapDenoiser
     {
     public:
@@ -204,7 +194,6 @@ namespace gi
 
         std::shared_ptr<CBuffer> pRtSceneLight;
         std::shared_ptr<CBuffer> pRtSceneGlobalCB;
-        std::shared_ptr<CBuffer> pRtSceneInstanceGpuData;
         std::shared_ptr<CBuffer> pVisualizeViewCB;
 
         std::shared_ptr<CGraphicsPipelineState>m_pLightMapGBufferPSO;
@@ -449,32 +438,6 @@ namespace gi
         CGIBaker::GetGraphicsContext()->EndRenderPasss();
 	}
 
-    static void AllocRtSceneGpuInstanceData(std::vector<SMeshInstanceGpuData>& sceneInstanceData)
-    {
-        uint32_t sceneMeshNum = pGiBaker->m_giMeshes.size();
-        sceneInstanceData.resize(sceneMeshNum);
-        for (uint32_t index = 0; index < sceneMeshNum; index++)
-        {
-            auto& giMesh = pGiBaker->m_giMeshes[index];
-            SMeshInstanceGpuData& meshInstanceGpuData = sceneInstanceData[index];
-            meshInstanceGpuData.m_worldTM.SetIdentity();
-
-            for (uint32_t i = 0; i < 4; i++)
-            {
-                for (uint32_t j = 0; j < 3; j++)
-                {
-                    meshInstanceGpuData.m_worldTM.m[i][j] = giMesh.m_meshInstanceInfo.m_transform[j][i];
-                }
-            }
-            meshInstanceGpuData.m_ibStride = giMesh.m_nIndexStride;
-            if (giMesh.m_nIndexStride > 0)
-            {
-                meshInstanceGpuData.m_ibIndex = giMesh.m_indexBuffer->GetOrAddVBIBBindlessIndex();
-            }
-            meshInstanceGpuData.m_vbIndex = giMesh.m_positionVB->GetOrAddVBIBBindlessIndex();
-        }
-    }
-
     void hwrtl::gi::PrePareLightMapRayTracingPass()
     {
         CGIBaker::GetDeviceCommand()->OpenCmdList();
@@ -489,12 +452,7 @@ namespace gi
 
         CGIBaker::GetDeviceCommand()->BuildBottomLevelAccelerationStructure(inoutGpuBlasDataArray);
         pGiBaker->m_pTLAS = CGIBaker::GetDeviceCommand()->BuildTopAccelerationStructure(inoutGpuBlasDataArray);
-
         pGiBaker->pRtSceneLight = CGIBaker::GetDeviceCommand()->CreateBuffer(pGiBaker->m_aRayTracingLights.data(), sizeof(SRayTracingLight) * pGiBaker->m_aRayTracingLights.size(), sizeof(SRayTracingLight), EBufferUsage::USAGE_Structure);
-
-        std::vector<SMeshInstanceGpuData> sceneInstanceData;
-        AllocRtSceneGpuInstanceData(sceneInstanceData);
-        pGiBaker->pRtSceneInstanceGpuData = CGIBaker::GetDeviceCommand()->CreateBuffer(sceneInstanceData.data(), sizeof(SMeshInstanceGpuData) * sceneInstanceData.size(), sizeof(SMeshInstanceGpuData), EBufferUsage::USAGE_Structure);
 
         SRtGlobalConstantBuffer rtGloablCB;
         rtGloablCB.m_nRtSceneLightCount = pGiBaker->m_aRayTracingLights.size();
@@ -522,7 +480,7 @@ namespace gi
             shaderDefines.m_defineValue = std::wstring(L"0");
         }
         
-        SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 5,2,1,0 } ,&shaderDefines,1};
+        SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 4,2,1,0 } ,&shaderDefines,1};
         pGiBaker->m_pRayTracingPSO = CGIBaker::GetDeviceCommand()->CreateRTPipelineStateAndShaderTable(rtPsoCreateDesc);
 
         CGIBaker::GetDeviceCommand()->CloseAndExecuteCmdList();
@@ -545,7 +503,6 @@ namespace gi
             CGIBaker::GetRayTracingContext()->SetShaderSRV(atlas.m_hPosTexture, 1);
             CGIBaker::GetRayTracingContext()->SetShaderSRV(atlas.m_hNormalTexture, 2);
             CGIBaker::GetRayTracingContext()->SetShaderSRV(pGiBaker->pRtSceneLight, 3);
-            CGIBaker::GetRayTracingContext()->SetShaderSRV(pGiBaker->pRtSceneInstanceGpuData, 4);
             CGIBaker::GetRayTracingContext()->DispatchRayTracicing(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
 
         }
@@ -613,7 +570,7 @@ namespace gi
         std::vector<std::shared_ptr<CTexture2D>>renderTargets;
         renderTargets.push_back(renderTarget);
         CGIBaker::GetGraphicsContext()->SetRenderTargets(renderTargets, dsTarget);
-        CGIBaker::GetGraphicsContext()->SetViewport(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
+        CGIBaker::GetGraphicsContext()->SetViewport(visualTex.x, visualTex.y);
         CGIBaker::GetGraphicsContext()->SetConstantBuffer(pGiBaker->pVisualizeViewCB,1);
 
         for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
@@ -692,8 +649,8 @@ namespace gi
         {
             SGIMesh& giMeshDesc = pGiBaker->m_giMeshes[index];
             giMeshLightMapSize.push_back(giMeshDesc.m_nLightMapSize);
-            nAtlasSize.x = std::max(nAtlasSize.x, giMeshDesc.m_nLightMapSize.x);
-            nAtlasSize.y = std::max(nAtlasSize.y, giMeshDesc.m_nLightMapSize.y);
+            nAtlasSize.x = std::max(nAtlasSize.x, giMeshDesc.m_nLightMapSize.x + 2);
+            nAtlasSize.y = std::max(nAtlasSize.y, giMeshDesc.m_nLightMapSize.y + 2);
         }
 
         int nextPow2 = NextPow2(nAtlasSize.x);
