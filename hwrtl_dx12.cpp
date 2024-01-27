@@ -1807,7 +1807,7 @@ namespace hwrtl
             dxBuffer->m_cbv = CDx12View{ cpuHandle ,gpuHandle ,cbvIndex };
         }
 
-        if(EnumHasAnyFlags(bufferUsage, EBufferUsage::USAGE_Structure) || EnumHasAnyFlags(bufferUsage, EBufferUsage::USAGE_BYTE_ADDRESS))
+        if(EnumHasAnyFlags(bufferUsage, EBufferUsage::USAGE_Structure))
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
             srvDesc.Format = DXGI_FORMAT_UNKNOWN;
@@ -1817,6 +1817,30 @@ namespace hwrtl
             srvDesc.Buffer.NumElements = nByteSize / nStride;
             srvDesc.Buffer.StructureByteStride = nStride;
             srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+
+            CDx12DescManager& csuDescManager = pDXDevice->m_csuDescManager;
+            uint32_t srvIndex = csuDescManager.AllocDesc();
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = csuDescManager.GetCPUHandle(srvIndex);
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = csuDescManager.GetGPUHandle(srvIndex);
+
+            pDevice->CreateShaderResourceView(dxBuffer->m_dxResource.m_pResource, &srvDesc, cpuHandle);
+
+            dxBuffer->m_dxResource.m_resourceState = D3D12_RESOURCE_STATE_COMMON;
+            dxBuffer->m_srv = CDx12View{ cpuHandle ,gpuHandle ,srvIndex };
+
+        }
+
+        if (EnumHasAnyFlags(bufferUsage, EBufferUsage::USAGE_BYTE_ADDRESS))
+        {
+            //https://github.com/microsoft/DirectX-Graphics-Samples/blob/master/MiniEngine/Core/GpuBuffer.cpp ByteAddressBuffer::CreateDerivedViews
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Buffer.FirstElement = 0;
+            srvDesc.Buffer.NumElements = UINT(nByteSize) / 4;
+            srvDesc.Buffer.StructureByteStride = 0;
+            srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
 
             CDx12DescManager& csuDescManager = pDXDevice->m_csuDescManager;
             uint32_t srvIndex = csuDescManager.AllocDesc();
@@ -1953,6 +1977,10 @@ namespace hwrtl
                         if (gpuMeshDataIns->m_nIndexStride > 0)
                         {
                             meshInstanceGpuData.m_ibIndex = gpuMeshDataIns->m_pIndexBuffer->GetOrAddVBIBBindlessIndex();
+                        }
+                        else
+                        {
+                            meshInstanceGpuData.m_ibIndex = 0;
                         }
                         meshInstanceGpuData.m_vbIndex = gpuMeshDataIns->m_pVertexBuffer->GetOrAddVBIBBindlessIndex();
                     }

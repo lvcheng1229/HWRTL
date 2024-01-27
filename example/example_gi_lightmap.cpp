@@ -333,13 +333,13 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     backPlane.m_nVertexCount = planeVertexCount;
     backPlane.m_nLightMapSize = Vec2i(planeLightMapSizeX, planeLightMapSizeY);
 
-    bakeMeshDescs.push_back(leftBox);
-    bakeMeshDescs.push_back(rightBox);
+    //bakeMeshDescs.push_back(leftBox);
+    //bakeMeshDescs.push_back(rightBox);
     bakeMeshDescs.push_back(bottomPlane);
     bakeMeshDescs.push_back(topPlane);
     bakeMeshDescs.push_back(leftPlane);
     bakeMeshDescs.push_back(rightPlane);
-    bakeMeshDescs.push_back(backPlane);
+    //bakeMeshDescs.push_back(backPlane);
 }
 
 void ExampleDestroyScene()

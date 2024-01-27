@@ -941,7 +941,7 @@ void DoRayTracing(
             ray.Origin += (abs(rtRaylod.m_worldPosition) + 0.5) * 0.001f * rtRaylod.m_worldNormal;
 
 #if RT_DEBUG_OUTPUT
-            ray.Direction = float3(0,0,1);
+            ray.Direction = float3(0,0,-1);
 #endif
 
             if(bounce == 0)
@@ -1113,9 +1113,9 @@ void MaterialClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTra
     }
 
     // vertex stride = 32 bit * 3 = 24 byte
-    float3 localVertex0 = asfloat(bindlessByteAddressBuffer[vbIndex].Load3(indices.x * 24));
-    float3 localVertex1 = asfloat(bindlessByteAddressBuffer[vbIndex].Load3(indices.y * 24));
-    float3 localVertex2 = asfloat(bindlessByteAddressBuffer[vbIndex].Load3(indices.z * 24));
+    float3 localVertex0 = asfloat(bindlessByteAddressBuffer[vbIndex].Load<float3>(indices.x * 12));
+    float3 localVertex1 = asfloat(bindlessByteAddressBuffer[vbIndex].Load<float3>(indices.y * 12));
+    float3 localVertex2 = asfloat(bindlessByteAddressBuffer[vbIndex].Load<float3>(indices.z * 12));
 
 #if RT_DEBUG_OUTPUT
     payload.m_debugPayload = float4(localVertex0 + float3(12.0,12.0,12.0),1.0);
