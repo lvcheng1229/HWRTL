@@ -1187,7 +1187,7 @@ struct SDenoiseGeometryVS2PS
 SDenoiseGeometryVS2PS DenoiseLightMapVS(SDenoiseGeometryApp2VS IN )
 {
     SDenoiseGeometryVS2PS denoiseGeoVS2PS = (SDenoiseGeometryVS2PS)0;
-    denoiseGeoVS2PS.position = float4(IN.position,1.0);
+    denoiseGeoVS2PS.position = float4(IN.position.xy,1.0,1.0);
     denoiseGeoVS2PS.textureCoord = IN.textureCoord;
     return denoiseGeoVS2PS;
 }
@@ -1206,6 +1206,8 @@ struct SDenoiseParams
     float m_filterStrength;
 
     float4 inputTexSizeAndInvSize;
+
+    float denoiseCBPadding[56];
 };
 ConstantBuffer<SDenoiseParams> denoiseParamsBuffer      : register(b0);
 
@@ -1239,6 +1241,7 @@ Texture2D<float4> denoiseInputNormalTexture             : register(t2);
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+
 
 float4 DenoiseLightMap(Texture2D<float4> inputTexture,float2 texUV)
 {
@@ -1336,6 +1339,175 @@ SDenoiseOutputs DenoiseLightMapPS(SDenoiseGeometryVS2PS IN )
 }
 
 /***************************************************************************
+*   LightMap Dilate Pass
+***************************************************************************/
+
+struct SDilateGeometryApp2VS
+{
+	float3 position    : TEXCOORD0;
+	float2 textureCoord : TEXCOORD1;
+};
+
+struct SDilateGeometryVS2PS
+{
+  float4 position : SV_POSITION;
+  float2 textureCoord :TEXCOORD0;
+};
+
+SDilateGeometryVS2PS DilateLightMapVS(SDilateGeometryApp2VS IN )
+{
+    SDilateGeometryVS2PS dilateGeoVS2PS = (SDilateGeometryVS2PS)0;
+    dilateGeoVS2PS.position = float4(IN.position.xy,1.0,1.0);
+    dilateGeoVS2PS.textureCoord = IN.textureCoord;
+    return dilateGeoVS2PS;
+}
+
+struct SDilateOutputs
+{
+    float4 irradianceAndSampleCount :SV_Target0;
+    float4 shDirectionality :SV_Target1;
+};
+
+struct SDilateParams
+{
+    float m_spatialBandWidth;
+    float m_resultBandWidth;
+    float m_normalBandWidth;
+    float m_filterStrength;
+
+    float4 inputTexSizeAndInvSize;
+
+    float denoiseCBPadding[56];
+};
+ConstantBuffer<SDilateParams> dilateParamsBuffer      : register(b0);
+
+Texture2D<float4> dilateInputIrradianceTexture         : register(t0);
+Texture2D<float4> dilateInputSHDirectionalityTexture   : register(t1);
+
+bool IsNotEmptyPixel(float4 pixel)
+{
+    const float EPSILON = 1e-6f;
+    return abs(pixel.x) > EPSILON && abs(pixel.y) > EPSILON && abs(pixel.z) > EPSILON && abs(pixel.w) > EPSILON;
+}
+
+float4 DilateLightMap(Texture2D<float4> inputTexture,float2 texUV)
+{
+    float4 centerValue = inputTexture.SampleLevel(gSamPointWarp, texUV , 0.0).xyzw;
+
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(-1,+0) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+1,+0) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+0,-1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+0,+1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(-1,-1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(-1,+1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+1,-1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+1,+1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(-2,+0) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+2,+0) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+0,-2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+0,+2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(-2,-1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(-2,+1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+2,-1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+2,+1) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(-1,-2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(-1,+2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+1,-2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+1,+2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(-2,+2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+2,+2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+2,-2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+    centerValue = IsNotEmptyPixel(centerValue) ? centerValue : inputTexture.SampleLevel(gSamPointWarp, texUV + float2(+2,+2) * dilateParamsBuffer.inputTexSizeAndInvSize.zw, 0.0).xyzw;
+
+    return centerValue;
+}
+
+SDilateOutputs DilateeLightMapPS(SDilateGeometryVS2PS IN )
+{
+    SDilateOutputs output;
+    output.irradianceAndSampleCount = DilateLightMap(dilateInputIrradianceTexture,IN.textureCoord);
+    output.shDirectionality = DilateLightMap(dilateInputSHDirectionalityTexture,IN.textureCoord);
+    return output;
+}
+
+/***************************************************************************
+*   LightMap Encoding Pass
+***************************************************************************/
+
+struct SEncodeGeometryApp2VS
+{
+	float3 position    : TEXCOORD0;
+	float2 textureCoord : TEXCOORD1;
+};
+
+struct SEncodeGeometryVS2PS
+{
+  float4 position : SV_POSITION;
+  float2 textureCoord :TEXCOORD0;
+};
+
+SEncodeGeometryVS2PS EncodeLightMapVS(SEncodeGeometryApp2VS IN )
+{
+    SEncodeGeometryVS2PS encodeGeoVS2PS = (SEncodeGeometryVS2PS)0;
+    encodeGeoVS2PS.position = float4(IN.position.xy,1.0,1.0);
+    encodeGeoVS2PS.textureCoord = IN.textureCoord;
+    return encodeGeoVS2PS;
+}
+
+struct SEncodeOutputs
+{
+    float4 irradianceAndLuma :SV_Target0;
+    float4 shDirectionalityAndLuma :SV_Target1;
+};
+
+struct SEncodeParams
+{
+    float m_spatialBandWidth;
+    float m_resultBandWidth;
+    float m_normalBandWidth;
+    float m_filterStrength;
+
+    float4 inputTexSizeAndInvSize;
+
+    float encodeCBPadding[56];
+};
+ConstantBuffer<SEncodeParams> encodeParamsBuffer      : register(b0);
+
+Texture2D<float4> encodeInputIrradianceTexture         : register(t0);
+Texture2D<float4> encodeInputSHDirectionalityTexture   : register(t1);
+
+SEncodeOutputs EncodeLightMapPS(SEncodeGeometryVS2PS IN )
+{
+    SEncodeOutputs output;
+
+    float4 lightMap0 = encodeInputIrradianceTexture.SampleLevel(gSamPointWarp, IN.textureCoord, 0.0).xyzw;
+    float4 lightMap1 = encodeInputSHDirectionalityTexture.SampleLevel(gSamPointWarp, IN.textureCoord, 0.0).xyzw;
+
+    float sampleCount = lightMap0.w;
+    if(sampleCount > 0)
+    {
+        float4 encodedSH = lightMap1.yzwx;
+        float3 irradiance = lightMap0.xyz / sampleCount;
+
+        const half logBlackPoint = 0.01858136;
+        output.irradianceAndLuma = float4(sqrt(max(irradiance, float3(0.00001, 0.00001, 0.00001))), log2( 1 + logBlackPoint ) - (encodedSH.w / 255 - 0.5 / 255));
+        output.shDirectionalityAndLuma = encodedSH;
+    }
+    else
+    {
+        output.irradianceAndLuma = float4(0,0,0,0);
+        output.shDirectionalityAndLuma = float4(0,0,0,0);
+    }
+
+    return output;
+}
+
+/***************************************************************************
 *   LightMap Visualize Pass
 ***************************************************************************/
 
@@ -1353,8 +1525,8 @@ struct SVisualizeGeometryVS2PS
   float3 normal : TEXCOORD1;
 };
 
-Texture2D<float4> visIrradianceAndSampleCount: register(t0);
-Texture2D<float4> visShDirectionality: register(t1);
+Texture2D<float4> visResultIrradianceAndLuma: register(t0);
+Texture2D<float4> visResultDirectionalityAndLuma: register(t1);
 
 cbuffer CVisualizeGeomConstantBuffer : register(b0)
 {
@@ -1388,17 +1560,23 @@ SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
 {
     SVisualizeGIResult output;
 
-    float4 lightmap0 = visIrradianceAndSampleCount.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
-    float4 lightmap1 = visShDirectionality.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
+    float4 lightmap0 = visResultIrradianceAndLuma.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
+    float4 lightmap1 = visResultDirectionalityAndLuma.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
 
+    // irradiance
     float3 irradiance = lightmap0.rgb * lightmap0.rgb;
-    float luma = lightmap1.w;
+    
+    // luma
+    float logL = lightmap0.w;
+    logL += lightmap1.w * (1.0 / 255) - (0.5 / 255);
+    const float logBlackPoint = 0.01858136;
+	float luma = exp2( logL ) - logBlackPoint;
 
+    // directionality
     float3 wordlNormal = IN.normal;
     float4 SH = lightmap1.xyzw;
     float Directionality = dot(SH,float4(wordlNormal.yzx,1.0));
 
-    //output.giResult = float4(irradiance + float3(IN.lightMapUV.xy , IN.lightMapUV.x + IN.lightMapUV.y) * 0.05f /*test code*/, 1.0);
-    output.giResult = float4(lightmap0.xyz / lightmap0.w, 1.0);
+    output.giResult = float4(irradiance * luma * Directionality, 1.0);
     return output;
 }

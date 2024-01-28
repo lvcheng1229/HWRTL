@@ -402,9 +402,10 @@ int main()
         ExecuteLightMapGBufferPass();
         PrePareLightMapRayTracingPass();
         ExecuteLightMapRayTracingPass();
+        DenoiseAndDilateLightMap();
+        EncodeResulttLightMap();
         PrePareVisualizeResultPass();
         ExecuteVisualizeResultPass();
-
         DeleteGIBaker();
         ExampleDestroyScene();
     }

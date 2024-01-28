@@ -112,11 +112,13 @@ namespace gi
 	void EncodeResulttLightMap(); // optional pass, you can encode the lightmap by you self
 	void GetEncodedLightMapTexture(std::vector<SOutputAtlasInfo>& outputAtlas);
 
-	
+	void FreeLightMapCpuData();
+
 	void GetEncodedLightMap(uint32_t orinalMeshIndex); //TODO
 	void GetUnEncodedLightMapTexture(); // TODO:
 
 	void DeleteGIBaker();
+	
 
 }
 }
