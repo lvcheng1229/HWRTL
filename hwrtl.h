@@ -31,6 +31,11 @@ SOFTWARE.
 // 
 // Vk hardware ray tracing libirary usage:
 //		
+// NOTICE:
+//		1. we use space 0 for common srv / cbv / uav resource
+//		2. use register space 1: for bindless vertex buffer and index buffer
+//		3. use space 2 for gpu instance data srv buffer
+//		3. use space 2 for root constant buffer
 // 
 
 #pragma once
@@ -281,6 +286,7 @@ namespace hwrtl
 		uint32_t m_nUAV = 0;
 		uint32_t m_nCBV = 0;
 		uint32_t m_nSampler = 0;
+		uint32_t m_rootConstant = 0;
 
 		uint32_t operator[](std::size_t index)
 		{
@@ -423,8 +429,9 @@ namespace hwrtl
 		virtual void SetTLAS(std::shared_ptr<CTopLevelAccelerationStructure> tlas, uint32_t bindIndex) = 0;
 		virtual void SetShaderSRV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex) = 0;
 		virtual void SetShaderSRV(std::shared_ptr<CBuffer>buffer, uint32_t bindIndex) = 0;
-
 		virtual void SetShaderUAV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex) = 0;
+
+		virtual void SetRootConstants(uint32_t bindIndex, uint32_t num32BitValuesToSet, const void* srcData, uint32_t destRootConstantOffsets) = 0;
 
 		virtual void SetConstantBuffer(std::shared_ptr<CBuffer> constantBuffer, uint32_t bindIndex) = 0;
 
@@ -448,6 +455,7 @@ namespace hwrtl
 		
 		virtual void SetShaderSRV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex) = 0;
 		virtual void SetConstantBuffer(std::shared_ptr<CBuffer> constantBuffer,uint32_t bindIndex) = 0;
+		
 		virtual void SetVertexBuffers(std::vector<std::shared_ptr<CBuffer>> vertexBuffers) = 0;
 
 		virtual void DrawInstanced(uint32_t vertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation) = 0;

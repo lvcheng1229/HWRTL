@@ -139,10 +139,30 @@ namespace gi
     {
         std::vector<SGIMesh>m_atlasGeometries;
 
+        // gbuffer output
         std::shared_ptr<CTexture2D> m_hPosTexture;
         std::shared_ptr<CTexture2D> m_hNormalTexture;
-        std::shared_ptr<CTexture2D> m_encodedIrradianceAndSubLuma1;
-        std::shared_ptr<CTexture2D> m_shDirectionalityAndSubLuma2;
+
+        // ray tracing output + dilate ouput
+        std::shared_ptr<CTexture2D> m_irradianceAndSampleCount;
+        std::shared_ptr<CTexture2D> m_shDirectionality;
+
+        // denoiser output
+        std::shared_ptr<CTexture2D> m_irradianceAndSampleCountPingPongTex;
+        std::shared_ptr<CTexture2D> m_shDirectionalityPingPongTex;
+
+        // encoded output
+        std::shared_ptr<CTexture2D> m_irradianceAndSampleCountEncoded;
+        std::shared_ptr<CTexture2D> m_shDirectionalityEncoded;
+    };
+
+
+    struct SRtRenderPassInfo
+    {
+        uint32_t m_rpIndex;
+        uint32_t m_rpPadding0;
+        uint32_t m_rpPadding1;
+        uint32_t m_rpPadding2;
     };
 
     // must match the light type define in hlsl code
@@ -198,6 +218,7 @@ namespace gi
 
         std::shared_ptr<CGraphicsPipelineState>m_pLightMapGBufferPSO;
         std::shared_ptr<CRayTracingPipelineState>m_pRayTracingPSO;
+        std::shared_ptr<CGraphicsPipelineState>m_pDenoisePSO;
         std::shared_ptr<CGraphicsPipelineState>m_pVisualizeGIPSO;
 
         std::shared_ptr<CTopLevelAccelerationStructure> m_pTLAS;
@@ -259,8 +280,8 @@ namespace gi
 
             STextureCreateDesc resTexCreateDesc = texCreateDesc;
             resTexCreateDesc.m_eTexUsage = ETexUsage::USAGE_SRV | ETexUsage::USAGE_UAV;
-            atlas.m_encodedIrradianceAndSubLuma1 = CGIBaker::GetDeviceCommand()->CreateTexture2D(resTexCreateDesc);
-            atlas.m_shDirectionalityAndSubLuma2 = CGIBaker::GetDeviceCommand()->CreateTexture2D(resTexCreateDesc);
+            atlas.m_irradianceAndSampleCount = CGIBaker::GetDeviceCommand()->CreateTexture2D(resTexCreateDesc);
+            atlas.m_shDirectionality = CGIBaker::GetDeviceCommand()->CreateTexture2D(resTexCreateDesc);
         }
     }
 
@@ -480,7 +501,7 @@ namespace gi
             shaderDefines.m_defineValue = std::wstring(L"0");
         }
         
-        SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 4,2,1,0 } ,&shaderDefines,1};
+        SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 4,2,1,0 ,1} ,&shaderDefines,1 };
         pGiBaker->m_pRayTracingPSO = CGIBaker::GetDeviceCommand()->CreateRTPipelineStateAndShaderTable(rtPsoCreateDesc);
 
         CGIBaker::GetDeviceCommand()->CloseAndExecuteCmdList();
@@ -497,16 +518,64 @@ namespace gi
             SAtlas& atlas = pGiBaker->m_atlas[index];
 
             CGIBaker::GetRayTracingContext()->SetConstantBuffer(pGiBaker->pRtSceneGlobalCB,0);
-            CGIBaker::GetRayTracingContext()->SetShaderUAV(atlas.m_encodedIrradianceAndSubLuma1, 0);
-            CGIBaker::GetRayTracingContext()->SetShaderUAV(atlas.m_shDirectionalityAndSubLuma2, 1);
+            CGIBaker::GetRayTracingContext()->SetShaderUAV(atlas.m_irradianceAndSampleCount, 0);
+            CGIBaker::GetRayTracingContext()->SetShaderUAV(atlas.m_shDirectionality, 1);
             CGIBaker::GetRayTracingContext()->SetTLAS(pGiBaker->m_pTLAS,0);
             CGIBaker::GetRayTracingContext()->SetShaderSRV(atlas.m_hPosTexture, 1);
             CGIBaker::GetRayTracingContext()->SetShaderSRV(atlas.m_hNormalTexture, 2);
             CGIBaker::GetRayTracingContext()->SetShaderSRV(pGiBaker->pRtSceneLight, 3);
-            CGIBaker::GetRayTracingContext()->DispatchRayTracicing(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
-
+            for (uint32_t sampleIndex = 0; sampleIndex <= pGiBaker->m_bakeConfig.m_bakerSamples; sampleIndex++)
+            {
+                SRtRenderPassInfo rtRpInfo;
+                rtRpInfo.m_rpIndex = sampleIndex;
+                CGIBaker::GetRayTracingContext()->SetRootConstants(0, sizeof(SRtRenderPassInfo) / sizeof(uint32_t), &rtRpInfo, 0);
+                CGIBaker::GetRayTracingContext()->DispatchRayTracicing(pGiBaker->m_nAtlasSize.x, pGiBaker->m_nAtlasSize.y);
+            }
         }
         CGIBaker::GetRayTracingContext()->EndRayTacingPasss();
+    }
+
+    static void PrePareDenoiseLightMapPass()
+    {
+        CGIBaker::GetDeviceCommand()->OpenCmdList();
+
+        std::vector<SShader>rsShaders;
+        rsShaders.push_back(SShader{ ERayShaderType::RS_VS,L"DenoiseLightMapVS" });
+        rsShaders.push_back(SShader{ ERayShaderType::RS_PS,L"DenoiseLightMapPS" });
+
+        SShaderResources rasterizationResources = { 3,0,1,0 };
+
+        std::vector<EVertexFormat>vertexLayouts;
+        vertexLayouts.push_back(EVertexFormat::FT_FLOAT3);
+        vertexLayouts.push_back(EVertexFormat::FT_FLOAT2);
+
+        std::vector<ETexFormat>rtFormats;
+        rtFormats.push_back(ETexFormat::FT_RGBA32_FLOAT);
+        rtFormats.push_back(ETexFormat::FT_RGBA32_FLOAT);
+
+        std::size_t dirPos = WstringConverter().from_bytes(__FILE__).find(L"hwrtl_gi.cpp");
+        std::wstring shaderPath = WstringConverter().from_bytes(__FILE__).substr(0, dirPos) + L"hwrtl_gi.hlsl";
+
+        SRasterizationPSOCreateDesc rsPsoCreateDesc = { shaderPath, rsShaders, rasterizationResources, vertexLayouts, rtFormats, ETexFormat::FT_None };
+        pGiBaker->m_pDenoisePSO = CGIBaker::GetDeviceCommand()->CreateRSPipelineState(rsPsoCreateDesc);
+
+        CGIBaker::GetDeviceCommand()->CloseAndExecuteCmdList();
+        CGIBaker::GetDeviceCommand()->WaitGPUCmdListFinish();
+    }
+
+    void hwrtl::gi::DenoiseAndDilateLightMap()
+    {
+        PrePareDenoiseLightMapPass();
+    }
+
+    void hwrtl::gi::EncodeResulttLightMap()
+    {
+
+    }
+
+    void hwrtl::gi::GetEncodedLightMapTexture(std::vector<SOutputAtlasInfo>& outputAtlas)
+    {
+
     }
 
     void hwrtl::gi::PrePareVisualizeResultPass()
@@ -576,8 +645,8 @@ namespace gi
         for (uint32_t index = 0; index < pGiBaker->m_atlas.size(); index++)
         {
             SAtlas& atlas = pGiBaker->m_atlas[index];
-            CGIBaker::GetGraphicsContext()->SetShaderSRV(atlas.m_encodedIrradianceAndSubLuma1, 0);
-            CGIBaker::GetGraphicsContext()->SetShaderSRV(atlas.m_shDirectionalityAndSubLuma2, 1);
+            CGIBaker::GetGraphicsContext()->SetShaderSRV(atlas.m_irradianceAndSampleCount, 0);
+            CGIBaker::GetGraphicsContext()->SetShaderSRV(atlas.m_shDirectionality, 1);
             for (uint32_t geoIndex = 0; geoIndex < atlas.m_atlasGeometries.size(); geoIndex++)
             {
                 SGIMesh& giMesh = atlas.m_atlasGeometries[geoIndex];

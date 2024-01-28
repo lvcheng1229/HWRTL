@@ -50,6 +50,7 @@ SOFTWARE.
 //      19. // "Precision Improvements for Ray / Sphere Intersection" - Ray Tracing Gems (2019) // https://link.springer.com/content/pdf/10.1007%2F978-1-4842-4427-2_7.pdf
 //      
 //      20. surpport mask material for foliage
+//      21. add blend seams pass
 
 //#ifndef INCLUDE_RT_SHADER
 //#define INCLUDE_RT_SHADER 1
@@ -170,6 +171,15 @@ struct SMeshInstanceGpuData
 ByteAddressBuffer bindlessByteAddressBuffer[] : register(t0, space1);
 StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t0, space2);
 
+struct SRtRenderPassInfo
+{
+    uint m_renderPassIndex;
+    uint rpInfoPadding0;
+    uint rpInfoPadding1;
+    uint rpInfoPadding2;
+};
+ConstantBuffer<SRtRenderPassInfo> rtRenderPassInfo : register(b0, space2);
+
 cbuffer CRtGlobalConstantBuffer : register(b0)
 {
     uint m_nRtSceneLightCount;
@@ -183,9 +193,8 @@ Texture2D<float4> rtWorldPosition : register(t1);
 Texture2D<float4> rtWorldNormal : register(t2);
 StructuredBuffer<SRayTracingLight> rtSceneLights : register(t3);
 
-
-RWTexture2D<float4> encodedIrradianceAndSubLuma1 : register(u0);
-RWTexture2D<float4> shDirectionalityAndSubLuma2 : register(u1);
+RWTexture2D<float4> irradianceAndValidSampleCount : register(u0);
+RWTexture2D<float4> shDirectionality : register(u1);
 
 struct SRayTracingIntersectionAttributes
 {
@@ -642,13 +651,15 @@ struct SLightTraceResult
 SLightTraceResult TraceDirectionalLight(RayDesc ray,uint nlightIndex)
 {
     SLightTraceResult lightTraceResult = (SLightTraceResult)0;
-
-    float cosTheta = dot(rtSceneLights[nlightIndex].m_lightDirection,ray.Direction);
-    if(cosTheta > 0)
+    if(ray.TMax == POSITIVE_INFINITY)
     {
-        lightTraceResult.m_radiance = rtSceneLights[nlightIndex].m_color * cosTheta;
-        lightTraceResult.m_pdf = 1.0;
-        lightTraceResult.m_hitT = POSITIVE_INFINITY;
+        float cosTheta = dot(rtSceneLights[nlightIndex].m_lightDirection,ray.Direction);
+        if(cosTheta > 0)
+        {
+            lightTraceResult.m_radiance = rtSceneLights[nlightIndex].m_color * cosTheta;
+            lightTraceResult.m_pdf = 1.0;
+            lightTraceResult.m_hitT = POSITIVE_INFINITY;
+        }
     }
     return lightTraceResult;
 }
@@ -662,7 +673,8 @@ SLightTraceResult TraceSphereLight(RayDesc ray,uint nlightIndex)
     float lightRadius2 = lightRadius * lightRadius;
     float3 oc = ray.Origin - lightPosition;
     float b = dot(oc,ray.Direction);
-    float h = lightRadius2 - length(oc - b * ray.Direction) * length(oc - b * ray.Direction);
+    float3 sub = oc - b * ray.Direction;
+    float h = lightRadius2 - dot(sub,sub);
     if (h > 0)
 	{
 		float t = -b - sqrt(h);
@@ -711,10 +723,12 @@ SMaterialClosestHitPayload TraceLightRay(RayDesc ray, bool bLastBounce, inout fl
 
     TraceRay(rtScene, RAY_FLAG_FORCE_OPAQUE, RAY_TRACING_MASK_OPAQUE, RT_MATERIAL_SHADER_INDEX, 1, 0, ray, materialCHSPayload);
 
+    // step3: Calculate Le in TraceLightRay function
     for(uint index = 0; index < m_nRtSceneLightCount; index++)
     {
         RayDesc lightRay = ray;
-        float3 lightRadiance = TraceLight(ray,index).m_radiance;
+        lightRay.TMax = materialCHSPayload.m_vHiTt < 0.0 ? ray.TMax : materialCHSPayload.m_vHiTt;
+        float3 lightRadiance = TraceLight(lightRay,index).m_radiance;
         radiance += pathThroughput * lightRadiance;
     }
 
@@ -778,7 +792,11 @@ void DoRayTracing(
     // pdf(xg) = lightPickPdf * lightTraceResult.m_pdf
     // w(xg) = pdf(xg) / ( pdf(xf) + pdf(xg) ) = mis(materialSample.m_pdf,lightPickPdf * lightTraceResult.m_pdf)
 
-    for(int bounce = 0; bounce <= 1; bounce++)
+    // step3: Calculate Le in TraceLightRay function
+    // for(uint index = 0; index < m_nRtSceneLightCount; index++)
+    //  radiance += Le
+
+    for(int bounce = 0; bounce <= maxBounces; bounce++)
     {
         const bool bIsCameraRay = bounce == 0;
         const bool bIsLastBounce = bounce == maxBounces;
@@ -800,22 +818,17 @@ void DoRayTracing(
             rtRaylod = TraceLightRay(ray,bIsLastBounce,pathThroughput,radiance);
         }
 
+#if RT_DEBUG_OUTPUT
+        if(bounce == 1)
+        {
+            rtDebugOutput = float4(radiance,1.0);
+        }
+#endif 
+
         if(rtRaylod.m_vHiTt < 0.0)// missing
         {
             break;
         }
-
-
-#if RT_DEBUG_OUTPUT
-        if(bounce == 1)
-        {
-            if((rtRaylod.m_eFlag & RT_PAYLOAD_FLAG_FRONT_FACE) != 0)
-            {
-                rtDebugOutput = float4(abs(rtRaylod.m_debugPayload.xyz),1.0);
-            }
-        }
-
-#endif
 
         if((rtRaylod.m_eFlag & RT_PAYLOAD_FLAG_FRONT_FACE) == 0)
         {
@@ -940,10 +953,6 @@ void DoRayTracing(
 
             ray.Origin += (abs(rtRaylod.m_worldPosition) + 0.5) * 0.001f * rtRaylod.m_worldNormal;
 
-#if RT_DEBUG_OUTPUT
-            ray.Direction = float3(0,0,-1);
-#endif
-
             if(bounce == 0)
             {
                 radianceDirection = ray.Direction;
@@ -959,6 +968,7 @@ void DoRayTracing(
                 }
 
                 float3 lightContribution = pathThroughput * lightTraceResult.m_radiance;
+ 
                 if(vLightPickingCdfPreSum > 0)
                 {
                     float previousCdfValue = index > 0 ? aLightPickingCdf[index - 1] : 0.0;
@@ -974,17 +984,18 @@ void DoRayTracing(
 
                         TraceRay(rtScene, RAY_FLAG_FORCE_OPAQUE, RAY_TRACING_MASK_OPAQUE, RT_SHADOW_SHADER_INDEX, 1, 0, shadowRay, shadowRayPaylod);
 
-                        if(shadowRayPaylod.m_vHiTt <= 0)
+                        if(shadowRayPaylod.m_vHiTt > 0)
                         {
                             lightContribution = 0.0;
                         }
 
-                        radianceValue += lightContribution;
+                        radiance += lightContribution;
                     }
                 }
             }
         }
     }
+
 
     radianceValue = radiance;
 }
@@ -993,8 +1004,6 @@ void DoRayTracing(
 void LightMapRayTracingRayGen()
 {
     const uint2 rayIndex = DispatchRaysIndex().xy;
-    shDirectionalityAndSubLuma2[rayIndex] = float4(0.0, 0.0, 1.0, 0.0);
-    encodedIrradianceAndSubLuma1[rayIndex] = float4(0.0, 0.0, 1.0, 0.0);
 
     float3 worldPosition = rtWorldPosition[rayIndex].xyz;
     float3 worldFaceNormal = rtWorldNormal[rayIndex].xyz;
@@ -1008,7 +1017,7 @@ void LightMapRayTracingRayGen()
 
     SRandomSequence randomSequence;
     randomSequence.m_randomSeed = 0;
-    randomSequence.m_nSampleIndex = StrongIntegerHash(rayIndex.y * m_nAtlasSize.x + rayIndex.x);
+    randomSequence.m_nSampleIndex = StrongIntegerHash(rayIndex.y * m_nAtlasSize.x + rayIndex.x) + rtRenderPassInfo.m_renderPassIndex;
 
     float3 radianceValue = 0; // unused currently
     float3 radianceDirection = 0;
@@ -1040,43 +1049,31 @@ void LightMapRayTracingRayGen()
 		bIsValidSample = false;
 	}
 
-    float4 irradianceAndSampleCount = float4(0,0,0,0);
-    float4 shDirectionality = float4(0,0,0,0);
-
     if (bIsValidSample)
     {
         {
             float TangentZ = saturate(dot(directionalLightRadianceDirection, worldFaceNormal)); //TODO: Shading Normal?
             if(TangentZ > 0.0)
             {
-                shDirectionality += Luminance(directionalLightRadianceValue) * SHBasisFunction(directionalLightRadianceDirection);
+                shDirectionality[rayIndex].rgba += Luminance(directionalLightRadianceValue) * SHBasisFunction(directionalLightRadianceDirection);
             }
-            irradianceAndSampleCount.rgb += directionalLightRadianceValue;
+            irradianceAndValidSampleCount[rayIndex].rgb += directionalLightRadianceValue;
         }
 
-        //{
-        //    float TangentZ = saturate(dot(radianceDirection, worldFaceNormal)); //TODO: Shading Normal?
-        //    if(TangentZ > 0.0)
-        //    {
-        //        shDirectionality += Luminance(radianceValue) * SHBasisFunction(radianceDirection);
-        //    }
-        //    irradianceAndSampleCount.rgb += radianceValue;            
-        //}
+        {
+            float TangentZ = saturate(dot(radianceDirection, worldFaceNormal)); //TODO: Shading Normal?
+            if(TangentZ > 0.0)
+            {
+                shDirectionality[rayIndex].rgba += Luminance(radianceValue) * SHBasisFunction(radianceDirection);
+            }
+            irradianceAndValidSampleCount[rayIndex].rgb += radianceValue;            
+        }
 
     }   
 
     if (bIsValidSample)
     {
-        irradianceAndSampleCount.w += 1.0;
-        irradianceAndSampleCount.rgb /= irradianceAndSampleCount.w;
-
-        float4 swizzedSH = shDirectionality.yzwx;
-        shDirectionalityAndSubLuma2[rayIndex] = swizzedSH;
-        
-        encodedIrradianceAndSubLuma1[rayIndex] = float4(
-            sqrt(max(irradianceAndSampleCount.rgb, float3(0.00001, 0.00001, 0.00001))),
-            1.0 
-            );
+        irradianceAndValidSampleCount[rayIndex].w += 1.0;
     }
 
 #if RT_DEBUG_OUTPUT
@@ -1117,10 +1114,6 @@ void MaterialClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTra
     float3 localVertex1 = asfloat(bindlessByteAddressBuffer[vbIndex].Load<float3>(indices.y * 12));
     float3 localVertex2 = asfloat(bindlessByteAddressBuffer[vbIndex].Load<float3>(indices.z * 12));
 
-#if RT_DEBUG_OUTPUT
-    payload.m_debugPayload = float4(localVertex0 + float3(12.0,12.0,12.0),1.0);
-#endif
-
     float3 wolrdPosition0 =  mul(worldTM, float4(localVertex0,1.0)).xyz;
     float3 wolrdPosition1 =  mul(worldTM, float4(localVertex1,1.0)).xyz;
     float3 wolrdPosition2 =  mul(worldTM, float4(localVertex2,1.0)).xyz;
@@ -1131,14 +1124,22 @@ void MaterialClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTra
 	float InvWorldArea = rsqrt(dot(Unnormalized, Unnormalized));
     float3 FaceNormal = Unnormalized * InvWorldArea;
 
-    float3 worldPosition = wolrdPosition0 * barycentrics.x + wolrdPosition1 * barycentrics.y + wolrdPosition2 * barycentrics.z;;
+    float3 worldPosition = wolrdPosition0 * barycentrics.x + wolrdPosition1 * barycentrics.y + wolrdPosition2 * barycentrics.z;
     
+
     payload.m_roughness = 1.0;
-    payload.m_baseColor = float3(1,1,1);
+
+    //New concrete albedo = 0.55
+    payload.m_baseColor = float3(0.55,0.55,0.55);
     payload.m_specColor = float3(0,0,0);
-    payload.m_diffuseColor = float3(1,1,1);
+    payload.m_diffuseColor = float3(0.55,0.55,0.55);
     payload.m_worldPosition = worldPosition;
     payload.m_worldNormal = FaceNormal;
+
+#if RT_DEBUG_OUTPUT
+    payload.m_debugPayload = float4(payload.m_worldNormal * 0.5 + 0.5 ,1.0);
+#endif
+
     // isFronFace
     if (HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE)
     {
@@ -1166,6 +1167,174 @@ void RayMiassMain(inout SMaterialClosestHitPayload payload)
 }
 #endif
 
+
+/***************************************************************************
+*   LightMap Denoise Pass
+***************************************************************************/
+
+struct SDenoiseGeometryApp2VS
+{
+	float3 position    : TEXCOORD0;
+	float2 textureCoord : TEXCOORD1;
+};
+
+struct SDenoiseGeometryVS2PS
+{
+  float4 position : SV_POSITION;
+  float2 textureCoord :TEXCOORD0;
+};
+
+SDenoiseGeometryVS2PS DenoiseLightMapVS(SDenoiseGeometryApp2VS IN )
+{
+    SDenoiseGeometryVS2PS denoiseGeoVS2PS = (SDenoiseGeometryVS2PS)0;
+    denoiseGeoVS2PS.position = float4(IN.position,1.0);
+    denoiseGeoVS2PS.textureCoord = IN.textureCoord;
+    return denoiseGeoVS2PS;
+}
+
+struct SDenoiseOutputs
+{
+    float4 irradianceAndSampleCount :SV_Target0;
+    float4 shDirectionality :SV_Target1;
+};
+
+struct SDenoiseParams
+{
+    float m_spatialBandWidth;
+    float m_resultBandWidth;
+    float m_normalBandWidth;
+    float m_filterStrength;
+
+    float4 inputTexSizeAndInvSize;
+};
+ConstantBuffer<SDenoiseParams> denoiseParamsBuffer      : register(b0);
+
+Texture2D<float4> denoiseInputIrradianceTexture         : register(t0);
+Texture2D<float4> denoiseInputSHDirectionalityTexture   : register(t1);
+Texture2D<float4> denoiseInputNormalTexture             : register(t2);
+
+//Joint Non-local means (JNLM) denoiser.
+//Based on Godot and YoctoImageDenoiser's JNLM implementation
+//https://github.com/ManuelPrandini/YoctoImageDenoiser/blob/06e19489dd64e47792acffde536393802ba48607/libs/yocto_extension/yocto_extension.cpp#L207
+//https://benedikt-bitterli.me/nfor/nfor.pdf
+
+// MIT License
+//
+// Copyright (c) 2020 ManuelPrandini
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+float4 DenoiseLightMap(Texture2D<float4> inputTexture,float2 texUV)
+{
+    const int HALF_PATCH_WINDOW = 4;
+    const int HALF_SEARCH_WINDOW = 10;
+
+    const float SIGMA_SPATIAL = denoiseParamsBuffer.m_spatialBandWidth;
+	const float SIGMA_LIGHT = denoiseParamsBuffer.m_resultBandWidth;
+	const float SIGMA_NORMAL = denoiseParamsBuffer.m_normalBandWidth;
+	const float FILTER_VALUE = denoiseParamsBuffer.m_filterStrength * SIGMA_LIGHT;
+
+    const int PATCH_WINDOW_DIMENSION = (HALF_PATCH_WINDOW * 2 + 1);
+	const int PATCH_WINDOW_DIMENSION_SQUARE = (PATCH_WINDOW_DIMENSION * PATCH_WINDOW_DIMENSION);
+	const float TWO_SIGMA_SPATIAL_SQUARE = 2.0f * SIGMA_SPATIAL * SIGMA_SPATIAL;
+	const float TWO_SIGMA_LIGHT_SQUARE = 2.0f * SIGMA_LIGHT * SIGMA_LIGHT;
+	const float TWO_SIGMA_NORMAL_SQUARE = 2.0f * SIGMA_NORMAL * SIGMA_NORMAL;
+	const float FILTER_SQUARE_TWO_SIGMA_LIGHT_SQUARE = FILTER_VALUE * FILTER_VALUE * TWO_SIGMA_LIGHT_SQUARE;
+	const float EPSILON = 1e-6f;
+
+    float3 denoisedRGB = float3(0,0,0);
+    float4 inputValue = inputTexture.SampleLevel(gSamPointWarp, texUV , 0.0).xyzw;
+    float3 inputColor = inputValue.rgb;
+    float3 inputNormal = denoiseInputNormalTexture.SampleLevel(gSamPointWarp, texUV ,0.0).xyz;
+    if (length(inputNormal) > EPSILON)
+    {
+        float sumWeights = 0.0f;
+        float3 inputRGB = inputColor.rgb;
+
+        for (int searchY = -HALF_SEARCH_WINDOW; searchY <= HALF_SEARCH_WINDOW; searchY++) 
+        {
+			for (int searchX = -HALF_SEARCH_WINDOW; searchX <= HALF_SEARCH_WINDOW; searchX++) 
+            {
+                float2 searchUV = texUV + float2(searchX,searchY) * denoiseParamsBuffer.inputTexSizeAndInvSize.zw;
+                // TODO: point or linear sampler?
+                float3 searchRGB = inputTexture.SampleLevel(gSamPointWarp, searchUV, 0.0).xyz;
+                float3 searchNormal = denoiseInputNormalTexture.SampleLevel(gSamPointWarp, searchUV, 0.0).xyz;
+
+                float patchSquareDist = 0.0f;
+				for (int offsetY = -HALF_PATCH_WINDOW; offsetY <= HALF_PATCH_WINDOW; offsetY++) 
+                {
+					for (int offsetX = -HALF_PATCH_WINDOW; offsetX <= HALF_PATCH_WINDOW; offsetX++) 
+                    {
+                        float2 offsetInputUV = texUV + float2(offsetX,offsetY) * denoiseParamsBuffer.inputTexSizeAndInvSize.zw;
+                        float2 offsetSearchUV = searchUV + float2(offsetX,offsetY) * denoiseParamsBuffer.inputTexSizeAndInvSize.zw;
+
+                        float3 offsetInputRGB = inputTexture.SampleLevel(gSamPointWarp, offsetInputUV, 0.0).xyz;
+                        float3 offsetSearchRGB = inputTexture.SampleLevel(gSamPointWarp, offsetSearchUV, 0.0).xyz;
+                        float3 offsetDeltaRGB = offsetInputRGB - offsetSearchRGB;
+                        patchSquareDist += dot(offsetDeltaRGB, offsetDeltaRGB) - TWO_SIGMA_LIGHT_SQUARE;
+					}
+				}
+
+				patchSquareDist = max(0.0f, patchSquareDist / (3.0f * PATCH_WINDOW_DIMENSION_SQUARE));
+
+				float weight = 1.0f;
+
+                if(searchUV.x > 1.0 || searchUV.y > 1.0 || searchUV.x < 0.0 || searchUV.x < 0.0)
+                {
+                    weight = 0.0;
+                }
+
+                if(length(searchNormal) < EPSILON)
+                {
+                    weight = 0.0;
+                }
+
+				float2 pixelDelta = float2(searchX, searchY);
+				float pixelSquareDist = dot(pixelDelta, pixelDelta);
+				weight *= exp(-pixelSquareDist / TWO_SIGMA_SPATIAL_SQUARE);
+				weight *= exp(-pixelSquareDist / FILTER_SQUARE_TWO_SIGMA_LIGHT_SQUARE);
+
+				float3 normalDelta = inputNormal - searchNormal;
+				float normalSquareDist = dot(normalDelta, normalDelta);
+				weight *= exp(-normalSquareDist / TWO_SIGMA_NORMAL_SQUARE);
+
+				denoisedRGB += weight * searchRGB;
+				sumWeights += weight;
+			}
+		}
+		denoisedRGB /= sumWeights;
+    }
+    else
+    {
+        denoisedRGB = inputColor;
+    }
+    return float4(denoisedRGB,inputValue.w);
+}
+
+SDenoiseOutputs DenoiseLightMapPS(SDenoiseGeometryVS2PS IN )
+{
+    SDenoiseOutputs output;
+    output.irradianceAndSampleCount = DenoiseLightMap(denoiseInputIrradianceTexture,IN.textureCoord);
+    output.shDirectionality = DenoiseLightMap(denoiseInputSHDirectionalityTexture,IN.textureCoord);
+    return output;
+}
+
 /***************************************************************************
 *   LightMap Visualize Pass
 ***************************************************************************/
@@ -1184,8 +1353,8 @@ struct SVisualizeGeometryVS2PS
   float3 normal : TEXCOORD1;
 };
 
-Texture2D<float4> visencodedIrradianceAndSubLuma1: register(t0);
-Texture2D<float4> visshDirectionalityAndSubLuma2: register(t1);
+Texture2D<float4> visIrradianceAndSampleCount: register(t0);
+Texture2D<float4> visShDirectionality: register(t1);
 
 cbuffer CVisualizeGeomConstantBuffer : register(b0)
 {
@@ -1219,9 +1388,8 @@ SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
 {
     SVisualizeGIResult output;
 
-    float4 lightmap0 = visencodedIrradianceAndSubLuma1.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
-    float4 lightmap1 = visshDirectionalityAndSubLuma2.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
-    lightmap1 = lightmap1;
+    float4 lightmap0 = visIrradianceAndSampleCount.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
+    float4 lightmap1 = visShDirectionality.SampleLevel(gSamPointWarp, IN.lightMapUV, 0.0);
 
     float3 irradiance = lightmap0.rgb * lightmap0.rgb;
     float luma = lightmap1.w;
@@ -1231,6 +1399,6 @@ SVisualizeGIResult VisualizeGIResultPS(SVisualizeGeometryVS2PS IN)
     float Directionality = dot(SH,float4(wordlNormal.yzx,1.0));
 
     //output.giResult = float4(irradiance + float3(IN.lightMapUV.xy , IN.lightMapUV.x + IN.lightMapUV.y) * 0.05f /*test code*/, 1.0);
-    output.giResult = float4(lightmap0.rgb, 1.0);
+    output.giResult = float4(lightmap0.xyz / lightmap0.w, 1.0);
     return output;
 }

@@ -104,6 +104,7 @@ MAKE_SMART_COM_PTR(ID3D12PipelineState);
 static constexpr uint32_t MaxPayloadSizeInBytes = 32 * sizeof(float);
 static constexpr uint32_t ShaderTableEntrySize = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
 static constexpr uint32_t nHandlePerView = 32;
+static constexpr uint32_t maxRootConstant = 16;
 
 namespace hwrtl
 {
@@ -366,6 +367,7 @@ namespace hwrtl
         virtual void SetShaderUAV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex)override;
 
         virtual void SetConstantBuffer(std::shared_ptr<CBuffer> constantBuffer, uint32_t bindIndex)override;
+        virtual void SetRootConstants(uint32_t bindIndex, uint32_t numRootConstantToSet, const void* srcData, uint32_t destRootConstantOffsets) override;
 
         virtual void DispatchRayTracicing(uint32_t width, uint32_t height)override;
     private:
@@ -380,6 +382,8 @@ namespace hwrtl
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>m_bindlessHandles;
         uint32_t m_bindlessNum = 0;
         bool m_bBindlessTableDirty = false;
+        
+
 
         D3D12_GPU_VIRTUAL_ADDRESS m_gpuInstanceDataPtr;
 
@@ -389,6 +393,7 @@ namespace hwrtl
 
         uint32_t m_bindlessRootTableIndex;
         uint32_t m_gpuInstanceDataRootTableIndex;
+        uint32_t m_rootConstantTableIndex;
 
         ID3D12RootSignaturePtr m_pGlobalRootSig;
         ID3D12StateObjectPtr m_pRtPipelineState;
@@ -397,6 +402,9 @@ namespace hwrtl
         uint32_t m_nShaderNum[4];
         uint32_t m_slotDescNum[4];
         uint32_t m_viewSlotIndex[4];
+
+        bool m_bRootConstantsDirty[maxRootConstant];
+        std::vector<uint32_t> m_rootConstantDatas[maxRootConstant];
     };
 
     class CDxGraphicsContext : public CGraphicsContext
@@ -916,7 +924,7 @@ namespace hwrtl
 
     struct SGlobalRootSignature
     {
-        void Init(ID3D12Device5Ptr pDevice, SShaderResources rayTracingResources)
+        void Init(ID3D12Device5Ptr pDevice, SShaderResources rayTracingResources, CDxRayTracingPipelineState* pDxRayTracingPipelineState)
         {
             std::vector<D3D12_ROOT_PARAMETER1> rootParams;
             std::vector<D3D12_DESCRIPTOR_RANGE1> descRanges;
@@ -931,7 +939,7 @@ namespace hwrtl
                 }
             }
 
-            rootParams.resize(totalRootNum + 2); // space 1 for bindless root table, space 2 for gpu instance buffer
+            rootParams.resize(totalRootNum + 3); // space 1 for bindless root table, space 2 for gpu instance buffer and root constant
             descRanges.resize(totalRootNum);
 
             uint32_t rootTabbleIndex = 0;
@@ -966,15 +974,28 @@ namespace hwrtl
             bindlessDescRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
             bindlessDescRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV);
 
+            // bindless index buffer and vertex buffer
             rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
             rootParams[rootTabbleIndex].DescriptorTable.NumDescriptorRanges = 1;
             rootParams[rootTabbleIndex].DescriptorTable.pDescriptorRanges = &bindlessDescRange;
             rootTabbleIndex++;
 
+            // gpu instance data srv buffer
             rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
             rootParams[rootTabbleIndex].Descriptor.ShaderRegister = 0;
             rootParams[rootTabbleIndex].Descriptor.RegisterSpace = 2;
             rootParams[rootTabbleIndex].Descriptor.Flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE;
+            rootTabbleIndex++;
+
+            for (uint32_t rootConstIndex = 0; rootConstIndex < rayTracingResources.m_rootConstant; rootConstIndex++)
+            {
+                rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+                rootParams[rootTabbleIndex].Constants.ShaderRegister = rootConstIndex;
+                rootParams[rootTabbleIndex].Constants.RegisterSpace = 2;
+                rootParams[rootTabbleIndex].Constants.Num32BitValues = 4;
+                rootTabbleIndex++;
+            }
+
 
             D3D12_ROOT_SIGNATURE_DESC1 rootSigDesc = {};
             rootSigDesc.NumParameters = rootParams.size();
@@ -1323,7 +1344,8 @@ namespace hwrtl
         SShaderDefine* shaderDefines = rtPsoDesc.shaderDefines;
         uint32_t defineNum = rtPsoDesc.defineNum;
 
-        uint32_t totalRootNum = 0;
+        uint32_t totalRootTableNum = 0;
+
 
         std::shared_ptr<CDxRayTracingPipelineState> pDxRayTracingPipelineState = std::make_shared<CDxRayTracingPipelineState>();
         for (uint32_t index = 0; index < 4; index++)
@@ -1332,9 +1354,11 @@ namespace hwrtl
 
             if (rayTracingResources[index] > 0)
             {
-                totalRootNum++;
+                totalRootTableNum++;
             }
         }
+
+        assert(rayTracingResources.m_rootConstant < maxRootConstant);
 
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
 
@@ -1440,7 +1464,7 @@ namespace hwrtl
         // global root signature
         SGlobalRootSignature globalRootSignature;
         {
-            globalRootSignature.Init(pDevice, rayTracingResources);
+            globalRootSignature.Init(pDevice, rayTracingResources, pDxRayTracingPipelineState.get());
             stateSubObjects[subObjectsIndex] = globalRootSignature.m_subobject;
             subObjectsIndex++;
         }
@@ -1507,7 +1531,7 @@ namespace hwrtl
         offsetShaderTableIndex += rayHitShaderIdentifiers.size();
 
         pDxRayTracingPipelineState->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pDXDevice->m_tempBuffers.AllocResource());
-        pDxRayTracingPipelineState->m_bindlessRootTableIndex = totalRootNum;
+        pDxRayTracingPipelineState->m_bindlessRootTableIndex = totalRootTableNum;
 
         return pDxRayTracingPipelineState;
     }
@@ -2108,6 +2132,7 @@ namespace hwrtl
         m_bPipelineStateDirty = true;
         m_bindlessRootTableIndex = dxRayTracingPSO->m_bindlessRootTableIndex;
         m_gpuInstanceDataRootTableIndex = m_bindlessRootTableIndex + 1;
+        m_rootConstantTableIndex = m_gpuInstanceDataRootTableIndex + 1;
     }
 
     void CDx12RayTracingContext::SetTLAS(std::shared_ptr<CTopLevelAccelerationStructure> tlas, uint32_t bindIndex)
@@ -2175,6 +2200,15 @@ namespace hwrtl
         m_bViewTableDirty[uint32_t(ESlotType::ST_B)] = true;
     }
 
+    void hwrtl::CDx12RayTracingContext::SetRootConstants(uint32_t bindIndex, uint32_t num32BitRootConstantToSet, const void* srcData, uint32_t destRootConstantOffsets)
+    {
+        assert(num32BitRootConstantToSet == 4); //TODO:
+
+        m_rootConstantDatas[bindIndex].resize(num32BitRootConstantToSet);
+        memcpy(m_rootConstantDatas[bindIndex].data() + destRootConstantOffsets, srcData, num32BitRootConstantToSet * sizeof(uint32_t));
+        m_bRootConstantsDirty[bindIndex] = true;
+    }
+
     void CDx12RayTracingContext::DispatchRayTracicing(uint32_t width, uint32_t height)
     {
         auto pCommandList = pDXDevice->m_pCmdList;
@@ -2188,6 +2222,17 @@ namespace hwrtl
 
         // bindless binding
         ApplyBindlessTable();
+
+        // root constant
+        for (uint32_t index = 0; index < maxRootConstant; index++)
+        {
+            if (m_bRootConstantsDirty[index])
+            {
+                pCommandList->SetComputeRoot32BitConstants(index + m_rootConstantTableIndex, m_rootConstantDatas[index].size(), m_rootConstantDatas[index].data(), 0);
+                m_bRootConstantsDirty[index] = false;
+            }
+        }
+        
 
         assert((m_gpuInstanceDataPtr != 0) && "you must set gpu instance data handle");
         pCommandList->SetComputeRootShaderResourceView(m_gpuInstanceDataRootTableIndex, m_gpuInstanceDataPtr);
@@ -2283,7 +2328,12 @@ namespace hwrtl
     {
         m_bViewTableDirty[0] = m_bViewTableDirty[1] = m_bViewTableDirty[2] = m_bViewTableDirty[3] = true;
         m_bPipelineStateDirty = true;
-        m_bBindlessTableDirty = true;
+        m_bBindlessTableDirty = true; //must set bindless table in rt pipeline
+
+        for (uint32_t index = 0; index < maxRootConstant; index++)
+        {
+            m_bRootConstantsDirty[index] = false;
+        }
     }
 
     /***************************************************************************

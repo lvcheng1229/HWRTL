@@ -333,13 +333,13 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     backPlane.m_nVertexCount = planeVertexCount;
     backPlane.m_nLightMapSize = Vec2i(planeLightMapSizeX, planeLightMapSizeY);
 
-    //bakeMeshDescs.push_back(leftBox);
-    //bakeMeshDescs.push_back(rightBox);
+    bakeMeshDescs.push_back(leftBox);
+    bakeMeshDescs.push_back(rightBox);
     bakeMeshDescs.push_back(bottomPlane);
     bakeMeshDescs.push_back(topPlane);
     bakeMeshDescs.push_back(leftPlane);
     bakeMeshDescs.push_back(rightPlane);
-    //bakeMeshDescs.push_back(backPlane);
+    bakeMeshDescs.push_back(backPlane);
 }
 
 void ExampleDestroyScene()
@@ -379,23 +379,23 @@ int main()
 
         SBakeConfig bakeConfig;
         bakeConfig.m_maxAtlasSize = 1024;
-        bakeConfig.m_bDebugRayTracing = true;
+        bakeConfig.m_bDebugRayTracing = false;
         bakeConfig.m_bAddVisualizePass = true;
+        bakeConfig.m_bakerSamples = 512;
         InitGIBaker(bakeConfig);
         AddBakeMeshsAndCreateVB(sceneMesh);
 
-        // 93 lm / ( 4 * PI) 
-        float intensity = 93.0f / (4.0f * 3.1415926535f);
+        float intensity = 1.0;
         Vec3 lightIntensity(intensity, intensity, intensity);
         AddDirectionalLight(lightIntensity, Vec3(-1, -1, 1), false);
 
-        Vec3 spherlight1Intensity(intensity * 0.8, intensity * 0.3, intensity * 0.3);
-        AddSphereLight(spherlight1Intensity, Vec3(-3.5, 3.5, 11.5), false, 5.0, 1.0);
+        Vec3 spherlight1Intensity(intensity * 1.6, intensity * 0.8, intensity * 0.8);
+        AddSphereLight(spherlight1Intensity, Vec3(-3.5, 3.5, 11.5), false, 5.0, 0.25);
 
-        Vec3 spherlight2Intensity(intensity * 0.3, intensity * 0.8, intensity * 0.8);
-        AddSphereLight(spherlight2Intensity, Vec3(-3.0, -3.0, 0.5), false, 5.0, 1.0);
-
-        Vec3 spherlight3Intensity(intensity * 0.8, intensity * 0.8, intensity * 0.3);
+        Vec3 spherlight2Intensity(intensity * 0.8, intensity * 1.6, intensity * 1.6);
+        AddSphereLight(spherlight2Intensity, Vec3(-2.5, -3.0, 2.5), false, 5.0, 1.0);
+        
+        Vec3 spherlight3Intensity(intensity * 1.6, intensity * 1.6, intensity * 0.8);
         AddSphereLight(spherlight3Intensity, Vec3(2.5, 0, 6.5), false, 5.0, 1.0);
 
         PrePareLightMapGBufferPass();
@@ -404,6 +404,7 @@ int main()
         ExecuteLightMapRayTracingPass();
         PrePareVisualizeResultPass();
         ExecuteVisualizeResultPass();
+
         DeleteGIBaker();
         ExampleDestroyScene();
     }

@@ -48,6 +48,7 @@ namespace gi
 	struct SBakeConfig
 	{
 		uint32_t m_maxAtlasSize;
+		uint32_t m_bakerSamples;
 		bool m_bDebugRayTracing = false; // see RT_DEBUG_OUTPUT in hwrtl_gi.hlsl
 		bool m_bAddVisualizePass = false;
 		bool m_bUseCustomDenoiser = false; // use custom denoiser or hwrtl default denoiser
@@ -82,6 +83,15 @@ namespace gi
 		virtual void InitDenoiser() = 0;
 	};
 
+	struct SOutputAtlasInfo
+	{
+		std::vector<uint32_t> m_orginalMeshIndex;
+		void* destOutputData = nullptr;
+		uint32_t m_lightMapByteSize = 0;
+		uint32_t m_pixelStride = 0;
+		Vec2i m_lightMapSize;
+	};
+
 	void InitGIBaker(SBakeConfig bakeConfig);
 	void AddBakeMesh(const SBakeMeshDesc& bakeMeshDesc);
 	void AddBakeMeshsAndCreateVB(const std::vector<SBakeMeshDesc>& bakeMeshDescs);
@@ -98,6 +108,13 @@ namespace gi
 	void PrePareVisualizeResultPass();
 	void ExecuteVisualizeResultPass();
 
+	void DenoiseAndDilateLightMap(); // optional pass, you can denoise the output lightmap with your custom denoiser such as oidn
+	void EncodeResulttLightMap(); // optional pass, you can encode the lightmap by you self
+	void GetEncodedLightMapTexture(std::vector<SOutputAtlasInfo>& outputAtlas);
+
+	
+	void GetEncodedLightMap(uint32_t orinalMeshIndex); //TODO
+	void GetUnEncodedLightMapTexture(); // TODO:
 
 	void DeleteGIBaker();
 
