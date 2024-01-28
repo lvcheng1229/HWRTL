@@ -73,6 +73,8 @@ namespace gi
 
 		Vec2i m_nLightMapSize;
 
+		int m_meshIndex = -1; // must set m_meshIndex,this value will be used to index light map
+
 		SMeshInstanceInfo m_meshInstanceInfo;
 	};
 
@@ -86,7 +88,8 @@ namespace gi
 	struct SOutputAtlasInfo
 	{
 		std::vector<uint32_t> m_orginalMeshIndex;
-		void* destOutputData = nullptr;
+		void* destIrradianceOutputData = nullptr;
+		void* destDirectionalityOutputData = nullptr;
 		uint32_t m_lightMapByteSize = 0;
 		uint32_t m_pixelStride = 0;
 		Vec2i m_lightMapSize;

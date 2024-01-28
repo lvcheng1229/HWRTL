@@ -263,6 +263,8 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     CreateRightPlaneMesh(planeVertexCount, planeLightMapSizeX, planeLightMapSizeY, rightPlaneGeoPositions, rightPlaneGeoLightMapUV, rightPlaneGeoNormals);
     CreateBackPlaneMesh(planeVertexCount, planeLightMapSizeX, planeLightMapSizeY, backPlaneGeoPositions, backPlaneGeoLightMapUV, backPlaneGeoNormals);
 
+    int meshIndex = 0;
+
     SBakeMeshDesc leftBox;
     leftBox.m_meshInstanceInfo = SMeshInstanceInfo();
     leftBox.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
@@ -277,7 +279,9 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     leftBox.m_meshInstanceInfo.m_transform[0][3] = -2;
     leftBox.m_meshInstanceInfo.m_transform[1][3] = 2;
     leftBox.m_meshInstanceInfo.m_transform[2][3] = 6;
-    
+    leftBox.m_meshIndex = meshIndex;
+    meshIndex++;
+
     SBakeMeshDesc rightBox = leftBox;
     rightBox.m_meshInstanceInfo = SMeshInstanceInfo();
     rightBox.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
@@ -287,6 +291,8 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     rightBox.m_meshInstanceInfo.m_transform[0][3] = 2;
     rightBox.m_meshInstanceInfo.m_transform[1][3] = -2;
     rightBox.m_meshInstanceInfo.m_transform[2][3] = 2;
+    rightBox.m_meshIndex = meshIndex;
+    meshIndex++;
 
     SBakeMeshDesc bottomPlane;
     bottomPlane.m_meshInstanceInfo = SMeshInstanceInfo();
@@ -296,6 +302,8 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     bottomPlane.m_pNormalData = bottomPlaneGeoNormals.data();
     bottomPlane.m_nVertexCount = planeVertexCount;
     bottomPlane.m_nLightMapSize = Vec2i(planeLightMapSizeX, planeLightMapSizeY);
+    bottomPlane.m_meshIndex = meshIndex;
+    meshIndex++;
 
     SBakeMeshDesc topPlane;
     topPlane.m_meshInstanceInfo = SMeshInstanceInfo();
@@ -305,6 +313,8 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     topPlane.m_pNormalData = topPlaneGeoNormals.data();
     topPlane.m_nVertexCount = planeVertexCount;
     topPlane.m_nLightMapSize = Vec2i(planeLightMapSizeX, planeLightMapSizeY);
+    topPlane.m_meshIndex = meshIndex;
+    meshIndex++;
 
     SBakeMeshDesc leftPlane;
     leftPlane.m_meshInstanceInfo = SMeshInstanceInfo();
@@ -314,6 +324,8 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     leftPlane.m_pNormalData = leftPlaneGeoNormals.data();
     leftPlane.m_nVertexCount = planeVertexCount;
     leftPlane.m_nLightMapSize = Vec2i(planeLightMapSizeX, planeLightMapSizeY);
+    leftPlane.m_meshIndex = meshIndex;
+    meshIndex++;
 
     SBakeMeshDesc rightPlane;
     rightPlane.m_meshInstanceInfo = SMeshInstanceInfo();
@@ -323,6 +335,8 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     rightPlane.m_pNormalData = rightPlaneGeoNormals.data();
     rightPlane.m_nVertexCount = planeVertexCount;
     rightPlane.m_nLightMapSize = Vec2i(planeLightMapSizeX, planeLightMapSizeY);
+    rightPlane.m_meshIndex = meshIndex;
+    meshIndex++;
 
     SBakeMeshDesc backPlane;
     backPlane.m_meshInstanceInfo = SMeshInstanceInfo();
@@ -332,6 +346,8 @@ void CreateAndAddScene(std::vector<SBakeMeshDesc>& bakeMeshDescs)
     backPlane.m_pNormalData = backPlaneGeoNormals.data();
     backPlane.m_nVertexCount = planeVertexCount;
     backPlane.m_nLightMapSize = Vec2i(planeLightMapSizeX, planeLightMapSizeY);
+    backPlane.m_meshIndex = meshIndex;
+    meshIndex++;
 
     bakeMeshDescs.push_back(leftBox);
     bakeMeshDescs.push_back(rightBox);
@@ -406,6 +422,13 @@ int main()
         EncodeResulttLightMap();
         PrePareVisualizeResultPass();
         ExecuteVisualizeResultPass();
+
+        std::vector<SOutputAtlasInfo> outputAtlas;
+        GetEncodedLightMapTexture(outputAtlas);
+
+        // add your code here!
+        FreeLightMapCpuData();
+        
         DeleteGIBaker();
         ExampleDestroyScene();
     }

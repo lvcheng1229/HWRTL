@@ -315,6 +315,9 @@ namespace hwrtl
 	public:
 		CTexture2D() {}
 		virtual ~CTexture2D() {}
+
+		uint32_t m_texWidth;
+		uint32_t m_texHeight;
 	};
 
 	class CBuffer
@@ -406,6 +409,9 @@ namespace hwrtl
 
 		virtual void BuildBottomLevelAccelerationStructure(std::vector<std::shared_ptr<SGpuBlasData>>& inoutGPUMeshDataPtr) = 0;
 		virtual std::shared_ptr<CTopLevelAccelerationStructure> BuildTopAccelerationStructure(std::vector<std::shared_ptr<SGpuBlasData>>& gpuMeshData) = 0;
+
+		virtual void* LockTextureForRead(std::shared_ptr<CTexture2D> readBackTexture) = 0;
+		virtual void UnLockTexture(std::shared_ptr<CTexture2D> readBackTexture) = 0;
 	};
 
 	class CContext

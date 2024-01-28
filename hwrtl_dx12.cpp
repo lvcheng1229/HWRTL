@@ -41,6 +41,7 @@ SOFTWARE.
 //      8. get immediate cmd list for create and upload buffer
 //      9. https://github.com/sebbbi/OffsetAllocator
 //      10. fix subobject desc extent bug: see Unreal CreateRayTracingStateObject
+//      11. read back stage texture pool
 //
 
 
@@ -195,6 +196,8 @@ namespace hwrtl
         CDx12View m_srv;
         CDx12View m_rtv;
         CDx12View m_dsv;
+
+        ID3D12ResourcePtr m_pStagereSource;
     };
 
     class CDxBuffer : public CBuffer
@@ -348,6 +351,9 @@ namespace hwrtl
         virtual std::shared_ptr<CBuffer> CreateBuffer(const void* pInitData, uint64_t nByteSize, uint64_t nStride, EBufferUsage bufferUsage) override;
         virtual void BuildBottomLevelAccelerationStructure(std::vector< std::shared_ptr<SGpuBlasData>>& inoutGPUMeshData)override;
         virtual std::shared_ptr<CTopLevelAccelerationStructure> BuildTopAccelerationStructure(std::vector<std::shared_ptr<SGpuBlasData>>& gpuMeshData)override;
+
+        virtual void* LockTextureForRead(std::shared_ptr<CTexture2D> readBackTexture)override;
+        virtual void UnLockTexture(std::shared_ptr<CTexture2D> readBackTexture) override;
     };
 
     class CDx12RayTracingContext : public CRayTracingContext
@@ -741,6 +747,14 @@ namespace hwrtl
     static const D3D12_HEAP_PROPERTIES uploadHeapProperies =
     {
         D3D12_HEAP_TYPE_UPLOAD,
+        D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        D3D12_MEMORY_POOL_UNKNOWN,
+        1,1
+    };
+
+    static const D3D12_HEAP_PROPERTIES readBackHeapProperies =
+    {
+        D3D12_HEAP_TYPE_READBACK,
         D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
         D3D12_MEMORY_POOL_UNKNOWN,
         1,1
@@ -1702,6 +1716,9 @@ namespace hwrtl
     {
         std::shared_ptr<CDxTexture2D> retDxTexture2D = std::make_shared<CDxTexture2D>();
 
+        retDxTexture2D->m_texWidth = texCreateDesc.m_width;
+        retDxTexture2D->m_texHeight = texCreateDesc.m_height;
+
         ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
 
         D3D12_RESOURCE_DESC resDesc = {};
@@ -2046,7 +2063,6 @@ namespace hwrtl
             Dx12OpenCmdListInternal();
         }
 
-
         {
             ID3D12Device5Ptr pDevice = pDXDevice->m_pDevice;
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -2066,6 +2082,87 @@ namespace hwrtl
         return dxTLAS;
     }
    
+    void* CDxDeviceCommand::LockTextureForRead(std::shared_ptr<CTexture2D> readBackTexture)
+    {
+        Dx12OpenCmdListInternal();
+
+        CDxTexture2D* dxTex = static_cast<CDxTexture2D*>(readBackTexture.get());
+        ID3D12ResourcePtr pSourceTex = dxTex->m_dxResource.m_pResource;
+
+        auto pCommandList = pDXDevice->m_pCmdList;
+        auto pDevice = pDXDevice->m_pDevice;
+
+        const auto desc = pSourceTex->GetDesc();
+        UINT64 totalResourceSize = 0;
+        UINT64 fpRowPitch = 0;
+        UINT fpRowCount = 0;
+        pDevice->GetCopyableFootprints(&desc, 0, 1, 0, nullptr, &fpRowCount, &fpRowPitch, &totalResourceSize);
+        const UINT64 dstRowPitch = (fpRowPitch + 255) & ~0xFFu;
+
+        D3D12_RESOURCE_DESC bufferDesc = {};
+        bufferDesc.DepthOrArraySize = 1;
+        bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+        bufferDesc.Height = 1;
+        bufferDesc.Width = dstRowPitch * desc.Height;
+        bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        bufferDesc.MipLevels = 1;
+        bufferDesc.SampleDesc.Count = 1;
+
+        ThrowIfFailed(pDevice->CreateCommittedResource(&readBackHeapProperies, D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&dxTex->m_pStagereSource)));
+        
+        D3D12_RESOURCE_STATES originalResourceState = dxTex->m_dxResource.m_resourceState;
+        pDXDevice->dxBarrierManager.AddResourceBarrier(&dxTex->m_dxResource, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        pDXDevice->dxBarrierManager.FlushResourceBarrier(pCommandList);
+
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT destBufferFootprint = {};
+        destBufferFootprint.Footprint.Width = static_cast<UINT>(desc.Width);
+        destBufferFootprint.Footprint.Height = desc.Height;
+        destBufferFootprint.Footprint.Depth = 1;
+        destBufferFootprint.Footprint.RowPitch = static_cast<UINT>(dstRowPitch);
+        destBufferFootprint.Footprint.Format = desc.Format;
+
+        D3D12_TEXTURE_COPY_LOCATION dxTextureCopyDestLocation;
+        dxTextureCopyDestLocation.pResource = dxTex->m_pStagereSource;
+        dxTextureCopyDestLocation.PlacedFootprint = destBufferFootprint;
+        dxTextureCopyDestLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+
+        D3D12_TEXTURE_COPY_LOCATION dxTextureCopySrcLocation;
+        dxTextureCopySrcLocation.pResource = dxTex->m_dxResource.m_pResource;
+        dxTextureCopySrcLocation.PlacedFootprint;
+        dxTextureCopySrcLocation.SubresourceIndex = 0;
+        dxTextureCopySrcLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+
+        pCommandList->CopyTextureRegion(&dxTextureCopyDestLocation, 0, 0, 0, &dxTextureCopySrcLocation, nullptr);
+        pDXDevice->dxBarrierManager.AddResourceBarrier(&dxTex->m_dxResource, originalResourceState);
+        pDXDevice->dxBarrierManager.FlushResourceBarrier(pCommandList);
+
+        Dx12CloseAndExecuteCmdListInternal();
+        Dx12WaitGPUCmdListFinishInternal();
+
+        Dx12OpenCmdListInternal();
+
+        void* pMappedMemory = nullptr;
+        D3D12_RANGE readRange = { 0, static_cast<SIZE_T>(512) };
+        D3D12_RANGE writeRange = { 0, 0 };
+        ThrowIfFailed(dxTex->m_pStagereSource->Map(0, &readRange, &pMappedMemory));
+
+        uint8_t AA = *(((uint8_t*)pMappedMemory) + 0);
+        uint8_t BB = *(((uint8_t*)pMappedMemory) + 1);
+        uint8_t CC = *(((uint8_t*)pMappedMemory) + 2);
+        uint8_t DD = *(((uint8_t*)pMappedMemory) + 3);
+
+        return pMappedMemory;
+    }
+
+    void CDxDeviceCommand::UnLockTexture(std::shared_ptr<CTexture2D> readBackTexture)
+    {
+        CDxTexture2D* dxTex = static_cast<CDxTexture2D*>(readBackTexture.get());
+        D3D12_RANGE writeRange = { 0, 0 };
+        dxTex->m_pStagereSource->Unmap(0, &writeRange);
+        dxTex->m_pStagereSource->Release();
+    }
 
     void CheckBinding(D3D12_CPU_DESCRIPTOR_HANDLE* handles)
     {

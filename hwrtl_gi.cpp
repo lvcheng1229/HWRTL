@@ -132,6 +132,8 @@ namespace gi
 
         int m_nAtlasIndex;
 
+        int m_meshIndex = -1;
+
         SMeshInstanceInfo m_meshInstanceInfo;
 	};
 
@@ -207,6 +209,8 @@ namespace gi
 	public:
 		std::vector<SGIMesh> m_giMeshes;
         std::vector<SAtlas>m_atlas;
+        std::vector<void*>m_irradianceReadBackData;
+        std::vector<void*>m_directionalityReadBackData;
 
         SBakeConfig m_bakeConfig;
         Vec2i m_nAtlasSize;
@@ -369,6 +373,9 @@ namespace gi
 
             giMesh.m_pGpuMeshData->m_nVertexCount = giMesh.m_nVertexCount;
             giMesh.m_pGpuMeshData->m_pVertexBuffer = giMesh.m_positionVB;
+
+            assert(bakeMeshDesc.m_meshIndex >= 0);
+            giMesh.m_meshIndex = bakeMeshDesc.m_meshIndex;
 
             std::vector<SMeshInstanceInfo> instanceInfos;
             instanceInfos.push_back(giMesh.m_meshInstanceInfo);
@@ -775,7 +782,47 @@ namespace gi
 
     void hwrtl::gi::GetEncodedLightMapTexture(std::vector<SOutputAtlasInfo>& outputAtlas)
     {
+        outputAtlas.resize(pGiBaker->m_atlas.size());
+        pGiBaker->m_irradianceReadBackData.resize(pGiBaker->m_atlas.size());
+        pGiBaker->m_directionalityReadBackData.resize(pGiBaker->m_atlas.size());
 
+        uint32_t imageSize = pGiBaker->m_nAtlasSize.x * pGiBaker->m_nAtlasSize.y * sizeof(uint8_t) * 4;
+        for (uint32_t atlasIndex = 0; atlasIndex < pGiBaker->m_atlas.size(); atlasIndex++)
+        {
+            SAtlas& altas = pGiBaker->m_atlas[atlasIndex];
+            pGiBaker->m_irradianceReadBackData[atlasIndex] = malloc(imageSize);
+            pGiBaker->m_directionalityReadBackData[atlasIndex] = malloc(imageSize);
+
+            void* lockedIrradianceData = CGIBaker::GetDeviceCommand()->LockTextureForRead(altas.m_irradianceAndSampleCountEncoded);
+            void* lockedDirectionalityData = CGIBaker::GetDeviceCommand()->LockTextureForRead(altas.m_shDirectionalityEncoded);
+
+            memcpy(pGiBaker->m_irradianceReadBackData[atlasIndex], lockedIrradianceData, imageSize);
+            memcpy(pGiBaker->m_directionalityReadBackData[atlasIndex], lockedDirectionalityData, imageSize);
+
+            CGIBaker::GetDeviceCommand()->UnLockTexture(altas.m_irradianceAndSampleCountEncoded);
+            CGIBaker::GetDeviceCommand()->UnLockTexture(altas.m_shDirectionalityEncoded);
+
+            outputAtlas[atlasIndex].destIrradianceOutputData= pGiBaker->m_irradianceReadBackData[atlasIndex];
+            outputAtlas[atlasIndex].destDirectionalityOutputData = pGiBaker->m_directionalityReadBackData[atlasIndex];
+            outputAtlas[atlasIndex].m_lightMapByteSize = imageSize;
+            outputAtlas[atlasIndex].m_pixelStride = sizeof(uint8_t) * 4;
+            outputAtlas[atlasIndex].m_lightMapSize = pGiBaker->m_nAtlasSize;
+            outputAtlas[atlasIndex].m_orginalMeshIndex.resize(altas.m_atlasGeometries.size());
+            for (uint32_t geoIndex = 0; geoIndex < altas.m_atlasGeometries.size(); geoIndex++)
+            {
+                SGIMesh& giMesh = altas.m_atlasGeometries[geoIndex];
+                outputAtlas[atlasIndex].m_orginalMeshIndex[geoIndex] = giMesh.m_meshIndex;
+            }
+        }
+    }
+
+    void hwrtl::gi::FreeLightMapCpuData()
+    {
+        for (uint32_t atlasIndex = 0; atlasIndex < pGiBaker->m_atlas.size(); atlasIndex++)
+        {
+            free(pGiBaker->m_irradianceReadBackData[atlasIndex]);
+            free(pGiBaker->m_directionalityReadBackData[atlasIndex]);
+        }
     }
 
     void hwrtl::gi::PrePareVisualizeResultPass()
