@@ -28,6 +28,7 @@ SOFTWARE.
 using namespace hwrtl;
 using namespace hwrtl::gi;
 
+#pragma warning (disable: 4996)
 
 void CreateBoxMesh(uint32_t boxVertexCount, uint32_t boxLightMapSizeX, uint32_t boxLightMapSizeY, std::vector<Vec3>& boxGeoPositions, std::vector<Vec2>&boxGeoLightMapUV, std::vector<Vec3>& normals)
 {
@@ -397,23 +398,20 @@ int main()
         bakeConfig.m_maxAtlasSize = 1024;
         bakeConfig.m_bDebugRayTracing = false;
         bakeConfig.m_bAddVisualizePass = true;
-        bakeConfig.m_bakerSamples = 512;
-        InitGIBaker(bakeConfig);
-        AddBakeMeshsAndCreateVB(sceneMesh);
+        bakeConfig.m_bakerSamples = 2;
 
         float intensity = 1.0;
         Vec3 lightIntensity(intensity, intensity, intensity);
-        AddDirectionalLight(lightIntensity, Vec3(-1, -1, 1), false);
-
         Vec3 spherlight1Intensity(intensity * 1.6, intensity * 0.8, intensity * 0.8);
-        AddSphereLight(spherlight1Intensity, Vec3(-3.5, 3.5, 11.5), false, 5.0, 0.25);
-
         Vec3 spherlight2Intensity(intensity * 0.8, intensity * 1.6, intensity * 1.6);
-        AddSphereLight(spherlight2Intensity, Vec3(-2.5, -3.0, 2.5), false, 5.0, 1.0);
-        
         Vec3 spherlight3Intensity(intensity * 1.6, intensity * 1.6, intensity * 0.8);
-        AddSphereLight(spherlight3Intensity, Vec3(2.5, 0, 6.5), false, 5.0, 1.0);
 
+        InitGIBaker(bakeConfig);
+        AddBakeMeshsAndCreateVB(sceneMesh);
+        AddDirectionalLight(lightIntensity, Vec3(-1, -1, 1), false);
+        AddSphereLight(spherlight1Intensity, Vec3(-3.5, 3.5, 11.5), false, 5.0, 0.25);
+        AddSphereLight(spherlight2Intensity, Vec3(-2.5, -3.0, 2.5), false, 5.0, 1.0);
+        AddSphereLight(spherlight3Intensity, Vec3(2.5, 0, 6.5), false, 5.0, 1.0);
         PrePareLightMapGBufferPass();
         ExecuteLightMapGBufferPass();
         PrePareLightMapRayTracingPass();
@@ -426,9 +424,50 @@ int main()
         std::vector<SOutputAtlasInfo> outputAtlas;
         GetEncodedLightMapTexture(outputAtlas);
 
+        
+        std::size_t exampleFilePath = std::string(__FILE__).find("example");
+        std::string tgaSavePath = std::string(__FILE__).substr(0, exampleFilePath) + "HWRT\\";
+
+        for (uint32_t index = 0; index < outputAtlas.size(); index++)
+        {
+            const SOutputAtlasInfo& outAtlas = outputAtlas[index];
+            char tgaTypeHeader[12] = { 0,0,2,0,0,0,0,0,0,0,0,0 };
+            char pixelHeader[6];
+            pixelHeader[0] = outAtlas.m_lightMapSize.x % 256;
+            pixelHeader[1] = outAtlas.m_lightMapSize.x / 256;
+            pixelHeader[2] = outAtlas.m_lightMapSize.y % 256;
+            pixelHeader[3] = outAtlas.m_lightMapSize.y / 256;
+            pixelHeader[4] = 32;
+            pixelHeader[5] = 8;
+
+            int imageSize = outAtlas.m_lightMapSize.x * outAtlas.m_lightMapSize.y * 4;
+            {
+                char irradianceChar = 'a' + index * 2 + 1;
+                std::string irradianceSavePath = tgaSavePath + irradianceChar + ".tga";
+                
+                FILE* irradianceFile = fopen(irradianceSavePath.c_str(), "wb");
+
+                fwrite(tgaTypeHeader, 12 * sizeof(char), 1, irradianceFile);
+                fwrite(pixelHeader, 6 * sizeof(char), 1, irradianceFile);
+
+                char* atlasData = new char[imageSize];
+
+                for (uint32_t pixelIndex = 0; pixelIndex < imageSize; pixelIndex += 4)
+                {
+                    atlasData[pixelIndex + 0] = ((char*)outAtlas.destIrradianceOutputData)[pixelIndex + 2]; // b
+                    atlasData[pixelIndex + 1] = ((char*)outAtlas.destIrradianceOutputData)[pixelIndex + 1]; // g
+                    atlasData[pixelIndex + 2] = ((char*)outAtlas.destIrradianceOutputData)[pixelIndex + 0]; // r
+                    atlasData[pixelIndex + 3] = ((char*)outAtlas.destIrradianceOutputData)[pixelIndex + 3]; // r
+                }
+
+                fwrite(atlasData, imageSize * sizeof(char), 1, irradianceFile);
+                
+                fclose(irradianceFile);
+            }
+        }
+
         // add your code here!
         FreeLightMapCpuData();
-        
         DeleteGIBaker();
         ExampleDestroyScene();
     }

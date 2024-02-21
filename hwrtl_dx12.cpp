@@ -50,7 +50,7 @@ SOFTWARE.
 
 #define ENABLE_THROW_FAILED_RESULT 1
 #define ENABLE_DX12_DEBUG_LAYER 1
-#define ENABLE_PIX_FRAME_CAPTURE 1
+#define ENABLE_PIX_FRAME_CAPTURE 0
 
 //dx12 headers
 #include <d3d12.h>
@@ -780,10 +780,10 @@ namespace hwrtl
         ThrowIfFailed(pDevice->CreateCommittedResource(&defaultHeapProperies, D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&defaultBuffer)));
         ThrowIfFailed(pDevice->CreateCommittedResource(&uploadHeapProperies, D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&pUploadBuffer)));
 
-        D3D12_SUBRESOURCE_DATA subResourceData = {};
-        subResourceData.pData = pInitData;
-        subResourceData.RowPitch = nByteSize;
-        subResourceData.SlicePitch = subResourceData.RowPitch;
+        //D3D12_SUBRESOURCE_DATA subResourceData = {};
+        //subResourceData.pData = pInitData;
+        //subResourceData.RowPitch = nByteSize;
+        //subResourceData.SlicePitch = subResourceData.RowPitch;
 
         D3D12_RESOURCE_BARRIER barrierBefore = {};
         barrierBefore.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
