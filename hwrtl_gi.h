@@ -65,11 +65,11 @@ namespace gi
 	{
 		const Vec3* m_pPositionData = nullptr;
 		const Vec2* m_pLightMapUVData = nullptr;
-		const Vec3i* m_pIndexData = nullptr;
+		//const Vec3i* m_pIndexData = nullptr;
 		const Vec3* m_pNormalData = nullptr; // optional
 
 		uint32_t m_nVertexCount = 0;
-		uint32_t m_nIndexCount = 0;
+		//uint32_t m_nIndexCount = 0;
 
 		Vec2i m_nLightMapSize;
 

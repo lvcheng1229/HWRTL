@@ -263,6 +263,7 @@ namespace hwrtl
 	{
 		float m_transform[3][4];
 		EInstanceFlag m_instanceFlag;
+		uint32_t m_instanceID = 0;
 		SMeshInstanceInfo();
 	};
 
@@ -287,6 +288,9 @@ namespace hwrtl
 		uint32_t m_nCBV = 0;
 		uint32_t m_nSampler = 0;
 		uint32_t m_rootConstant = 0;
+
+		uint32_t m_useBindlessTex2D = false;
+		uint32_t m_useByteAddressBuffer = false;
 
 		uint32_t operator[](std::size_t index)
 		{
@@ -315,6 +319,7 @@ namespace hwrtl
 	public:
 		CTexture2D() {}
 		virtual ~CTexture2D() {}
+		virtual uint32_t GetOrAddTexBindlessIndex() = 0;
 
 		uint32_t m_texWidth;
 		uint32_t m_texHeight;
@@ -325,7 +330,7 @@ namespace hwrtl
 	public:
 		CBuffer() {}
 		virtual ~CBuffer() {}
-		virtual uint32_t GetOrAddVBIBBindlessIndex() = 0;
+		virtual uint32_t GetOrAddByteAddressBindlessIndex() = 0;
 	};
 
 	class CBottomLevelAccelerationStructure
@@ -479,7 +484,7 @@ namespace hwrtl
 		float lenght = sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
 		if (lenght > 0.0)
 		{
-			lenght = 1.0 / lenght;
+			lenght = 1.0f / lenght;
 		}
 		return Vec3(vec.x, vec.y, vec.z) * lenght;
 	}

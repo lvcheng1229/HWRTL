@@ -398,7 +398,7 @@ int main()
         bakeConfig.m_maxAtlasSize = 1024;
         bakeConfig.m_bDebugRayTracing = false;
         bakeConfig.m_bAddVisualizePass = true;
-        bakeConfig.m_bakerSamples = 2;
+        bakeConfig.m_bakerSamples = 1;
 
         float intensity = 1.0;
         Vec3 lightIntensity(intensity, intensity, intensity);

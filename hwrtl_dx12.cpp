@@ -42,6 +42,7 @@ SOFTWARE.
 //      9. https://github.com/sebbbi/OffsetAllocator
 //      10. fix subobject desc extent bug: see Unreal CreateRayTracingStateObject
 //      11. read back stage texture pool
+//      12. reslease gpu resource after delete shared_ptr handle
 //
 
 
@@ -50,7 +51,7 @@ SOFTWARE.
 
 #define ENABLE_THROW_FAILED_RESULT 1
 #define ENABLE_DX12_DEBUG_LAYER 1
-#define ENABLE_PIX_FRAME_CAPTURE 0
+#define ENABLE_PIX_FRAME_CAPTURE 1
 
 //dx12 headers
 #include <d3d12.h>
@@ -106,6 +107,10 @@ static constexpr uint32_t MaxPayloadSizeInBytes = 32 * sizeof(float);
 static constexpr uint32_t ShaderTableEntrySize = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
 static constexpr uint32_t nHandlePerView = 32;
 static constexpr uint32_t maxRootConstant = 16;
+
+#define BINDLESS_BYTE_ADDRESS_BUFFER_SPACE 1 /*space2*/
+#define BINDLESS_TEXTURE_SPACE 2 /*space3*/
+#define ROOT_CONSTANT_SPACE 5 /*space2*/
 
 namespace hwrtl
 {
@@ -190,6 +195,8 @@ namespace hwrtl
             // TODO: Release Desc In Desc Manager
         }
 
+        virtual uint32_t GetOrAddTexBindlessIndex()override;
+
         CDx12Resouce m_dxResource;
 
         CDx12View m_uav;
@@ -198,6 +205,9 @@ namespace hwrtl
         CDx12View m_dsv;
 
         ID3D12ResourcePtr m_pStagereSource;
+
+        bool m_bBindlessValid = false;
+        uint32_t m_bindlessDescIndex;
     };
 
     class CDxBuffer : public CBuffer
@@ -208,7 +218,7 @@ namespace hwrtl
             // TODO: Release Desc In Desc Manager
         }
 
-        virtual uint32_t GetOrAddVBIBBindlessIndex() override;
+        virtual uint32_t GetOrAddByteAddressBindlessIndex() override;
 
         CDx12Resouce m_dxResource;
 
@@ -246,7 +256,7 @@ namespace hwrtl
         ID3D12ResourcePtr m_pShaderTable;
         uint32_t m_nShaderNum[4];
         uint32_t m_slotDescNum[4];
-        uint32_t m_bindlessRootTableIndex;
+        uint32_t m_bindlessTLASRootTableIndex;
 
         CDxRayTracingPipelineState()
         {
@@ -255,7 +265,7 @@ namespace hwrtl
             m_pRtPipelineState = nullptr;
             m_nShaderNum[0] = m_nShaderNum[1] = m_nShaderNum[2] = m_nShaderNum[3] = 0;
             m_slotDescNum[0] = m_slotDescNum[1] = m_slotDescNum[2] = m_slotDescNum[3] = 0;
-            m_bindlessRootTableIndex = 0;
+            m_bindlessTLASRootTableIndex = 0;
         }
     };
    
@@ -275,21 +285,11 @@ namespace hwrtl
         ID3D12ResourcePtr m_pblas;
     };
 
-    struct SMeshInstanceGpuData
-    {
-        Matrix44 m_worldTM;
-
-        uint32_t m_ibStride;
-        uint32_t m_ibIndex;
-        uint32_t m_vbIndex;
-        uint32_t unused;
-    };
+    
 
     class CDxTopLevelAccelerationStructure : public CTopLevelAccelerationStructure
     {
     public:
-        std::vector<SMeshInstanceGpuData> m_sceneInstanceData;
-        std::shared_ptr<CBuffer> m_instanceGpuData;
         ID3D12ResourcePtr m_ptlas;
         CDx12View m_srv;
     };
@@ -319,7 +319,8 @@ namespace hwrtl
         CDx12DescManager m_dsvDescManager;
         CDx12DescManager m_csuDescManager;
 
-        CDXPassDescManager m_bindlessDescManager;
+        CDXPassDescManager m_bindlessByteAddressDescManager;
+        CDXPassDescManager m_bindlessTexDescManager;
 
         CDxResourceBarrierManager dxBarrierManager;
 
@@ -385,20 +386,19 @@ namespace hwrtl
     private:
         CDXPassDescManager m_rtPassDescManager;
 
-        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>m_bindlessHandles;
+        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>m_bindlessTLASHandles;
         uint32_t m_bindlessNum = 0;
         bool m_bBindlessTableDirty = false;
         
-
-
-        D3D12_GPU_VIRTUAL_ADDRESS m_gpuInstanceDataPtr;
+        //D3D12_GPU_VIRTUAL_ADDRESS m_gpuInstanceDataPtr;
 
         D3D12_CPU_DESCRIPTOR_HANDLE m_viewHandles[4][nHandlePerView];
         bool m_bViewTableDirty[4];
         bool m_bPipelineStateDirty;
 
-        uint32_t m_bindlessRootTableIndex;
+        uint32_t m_bindlessTLASRootTableIndex;
         uint32_t m_gpuInstanceDataRootTableIndex;
+        uint32_t m_bindlessTexRootTableIndex;
         uint32_t m_rootConstantTableIndex;
 
         ID3D12RootSignaturePtr m_pGlobalRootSig;
@@ -953,7 +953,7 @@ namespace hwrtl
                 }
             }
 
-            rootParams.resize(totalRootNum + 3); // space 1 for bindless root table, space 2 for gpu instance buffer and root constant
+            rootParams.resize(totalRootNum + 2 + rayTracingResources.m_rootConstant);
             descRanges.resize(totalRootNum);
 
             uint32_t rootTabbleIndex = 0;
@@ -980,26 +980,38 @@ namespace hwrtl
                 }
             }
             
-            D3D12_DESCRIPTOR_RANGE1 bindlessDescRange;
-            bindlessDescRange.BaseShaderRegister = 0;
-            bindlessDescRange.NumDescriptors = -1;
-            bindlessDescRange.RegisterSpace = 1;
-            bindlessDescRange.OffsetInDescriptorsFromTableStart = 0;
-            bindlessDescRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
-            bindlessDescRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV);
+            // bindless byte address buffer
+            {
+                D3D12_DESCRIPTOR_RANGE1 bindlessByteAddressDescRange;
+                bindlessByteAddressDescRange.BaseShaderRegister = 0;
+                bindlessByteAddressDescRange.NumDescriptors = -1;
+                bindlessByteAddressDescRange.RegisterSpace = 1;
+                bindlessByteAddressDescRange.OffsetInDescriptorsFromTableStart = 0;
+                bindlessByteAddressDescRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+                bindlessByteAddressDescRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV);
 
-            // bindless index buffer and vertex buffer
-            rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-            rootParams[rootTabbleIndex].DescriptorTable.NumDescriptorRanges = 1;
-            rootParams[rootTabbleIndex].DescriptorTable.pDescriptorRanges = &bindlessDescRange;
-            rootTabbleIndex++;
+                // bindless index buffer and vertex buffer
+                rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+                rootParams[rootTabbleIndex].DescriptorTable.NumDescriptorRanges = BINDLESS_BYTE_ADDRESS_BUFFER_SPACE;
+                rootParams[rootTabbleIndex].DescriptorTable.pDescriptorRanges = &bindlessByteAddressDescRange;
+                rootTabbleIndex++;
+            }
 
-            // gpu instance data srv buffer
-            rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-            rootParams[rootTabbleIndex].Descriptor.ShaderRegister = 0;
-            rootParams[rootTabbleIndex].Descriptor.RegisterSpace = 2;
-            rootParams[rootTabbleIndex].Descriptor.Flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE;
-            rootTabbleIndex++;
+            // bindless texture 
+            {
+                D3D12_DESCRIPTOR_RANGE1 bindlessTexDescRange;
+                bindlessTexDescRange.BaseShaderRegister = 0;
+                bindlessTexDescRange.NumDescriptors = -1;
+                bindlessTexDescRange.RegisterSpace = BINDLESS_TEXTURE_SPACE;
+                bindlessTexDescRange.OffsetInDescriptorsFromTableStart = 0;
+                bindlessTexDescRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+                bindlessTexDescRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV);
+                rootParams[rootTabbleIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+                rootParams[rootTabbleIndex].DescriptorTable.NumDescriptorRanges = 1;
+                rootParams[rootTabbleIndex].DescriptorTable.pDescriptorRanges = &bindlessTexDescRange;
+                rootTabbleIndex++;
+            }
+
 
             for (uint32_t rootConstIndex = 0; rootConstIndex < rayTracingResources.m_rootConstant; rootConstIndex++)
             {
@@ -1009,7 +1021,6 @@ namespace hwrtl
                 rootParams[rootTabbleIndex].Constants.Num32BitValues = 4;
                 rootTabbleIndex++;
             }
-
 
             D3D12_ROOT_SIGNATURE_DESC1 rootSigDesc = {};
             rootSigDesc.NumParameters = rootParams.size();
@@ -1282,7 +1293,8 @@ namespace hwrtl
         m_rtvDescManager.Init(m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, false);
         m_csuDescManager.Init(m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, false);
         m_dsvDescManager.Init(m_pDevice, 512, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, false);
-        m_bindlessDescManager.Init(m_pDevice, false);
+        m_bindlessByteAddressDescManager.Init(m_pDevice, false);
+        m_bindlessTexDescManager.Init(m_pDevice, false);
 
         ThrowIfFailed(m_pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_pCmdAllocator)));
         ThrowIfFailed(m_pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_pCmdAllocator, nullptr, IID_PPV_ARGS(&m_pCmdList)));
@@ -1306,7 +1318,7 @@ namespace hwrtl
     * CBindlessResourceManager
     ***************************************************************************/
 
-    uint32_t CDxBuffer::GetOrAddVBIBBindlessIndex()
+    uint32_t CDxBuffer::GetOrAddByteAddressBindlessIndex()
     {
         if (m_bBindlessValid)
         {
@@ -1317,13 +1329,32 @@ namespace hwrtl
             m_bBindlessValid = true;
 
             uint32_t numCopy = 1;
-            uint32_t startIndex = pDXDevice->m_bindlessDescManager.GetAndAddCurrentPassSlotStart(numCopy);
-            D3D12_CPU_DESCRIPTOR_HANDLE destCPUHandle = pDXDevice->m_bindlessDescManager.GetCPUHandle(startIndex);
+            uint32_t startIndex = pDXDevice->m_bindlessByteAddressDescManager.GetAndAddCurrentPassSlotStart(numCopy);
+            D3D12_CPU_DESCRIPTOR_HANDLE destCPUHandle = pDXDevice->m_bindlessByteAddressDescManager.GetCPUHandle(startIndex);
             pDXDevice->m_pDevice->CopyDescriptors(1, &destCPUHandle, &numCopy, numCopy, &m_srv.m_pCpuDescHandle, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            m_bindlessDescIndex = startIndex;
             return startIndex;
         }
     }
-  
+    
+    uint32_t CDxTexture2D::GetOrAddTexBindlessIndex()
+    {
+        if (m_bBindlessValid)
+        {
+            return m_bindlessDescIndex;
+        }
+        else
+        {
+            m_bBindlessValid = true;
+
+            uint32_t numCopy = 1;
+            uint32_t startIndex = pDXDevice->m_bindlessTexDescManager.GetAndAddCurrentPassSlotStart(numCopy);
+            D3D12_CPU_DESCRIPTOR_HANDLE destCPUHandle = pDXDevice->m_bindlessTexDescManager.GetCPUHandle(startIndex);
+            pDXDevice->m_pDevice->CopyDescriptors(1, &destCPUHandle, &numCopy, numCopy, &m_srv.m_pCpuDescHandle, nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            m_bindlessDescIndex = startIndex;
+            return startIndex;
+        }
+    }
 
     /***************************************************************************
     * CDxDeviceCommand
@@ -1404,18 +1435,35 @@ namespace hwrtl
         uint32_t subObjectsIndex = 0;
 
         // create dxil subobjects
-        DxcDefine dxcDefine;
-        dxcDefine.Name = L"INCLUDE_RT_SHADER";
-        dxcDefine.Value = L"1";
+        std::vector<DxcDefine> buildInDefines;
+        buildInDefines.resize(4);
+
+        buildInDefines[0].Name = L"INCLUDE_RT_SHADER";
+        buildInDefines[0].Value = L"1";
+
+        buildInDefines[1].Name = L"BINDLESS_BYTE_ADDRESS_BUFFER_REGISTER";
+        buildInDefines[1].Value = L" register(t0, space1)";
+
+        buildInDefines[2].Name = L"BINDLESS_TEXTURE_REGISTER";
+        buildInDefines[2].Value = L" register(t0, space2)";
+
+        buildInDefines[3].Name = L"ROOT_CONSTANT_SPACE";
+        buildInDefines[3].Value = L" 5";
+
 
         std::vector<DxcDefine>dxcDefines;
-        dxcDefines.resize(defineNum + 1);
+        dxcDefines.resize(defineNum + buildInDefines.size());
         for (uint32_t index = 0; index < defineNum; index++)
         {
             dxcDefines[index].Name = shaderDefines[index].m_defineName.c_str();
             dxcDefines[index].Value = shaderDefines[index].m_defineValue.c_str();
         }
-        dxcDefines[defineNum] = dxcDefine;
+
+        for (uint32_t index = 0; index < buildInDefines.size(); index++)
+        {
+            dxcDefines[defineNum + index] = buildInDefines[index];
+        }
+        
 
         ID3DBlobPtr pDxilLib = Dx12CompileRayTracingLibraryDXC(shaderPath, L"", L"lib_6_3", dxcDefines.data(), dxcDefines.size());
         SDxilLibrary dxilLib(pDxilLib, pEntryPoint.data(), pEntryPoint.size());
@@ -1474,6 +1522,12 @@ namespace hwrtl
             stateSubObjects[subObjectsIndex] = pipelineConfig.m_subobject;
             subObjectsIndex++;
         }
+
+        // root table 0 - N cbv srv uav sampler
+        // root table N + 1 ,space 1, TLAS bindless vertex / index buffer
+        // root table N + 2 ,space 2, TLAS gpu instance buffer data(the index of bindless vertex buffer)
+        // root table N + 3 ,space 3, Bindless texture
+        // root table N + 3 -> N + 3 + M, root constant
 
         // global root signature
         SGlobalRootSignature globalRootSignature;
@@ -1545,7 +1599,7 @@ namespace hwrtl
         offsetShaderTableIndex += rayHitShaderIdentifiers.size();
 
         pDxRayTracingPipelineState->m_pShaderTable = CreateDefaultBuffer(shaderTableData.data(), shaderTableSize, pDXDevice->m_tempBuffers.AllocResource());
-        pDxRayTracingPipelineState->m_bindlessRootTableIndex = totalRootTableNum;
+        pDxRayTracingPipelineState->m_bindlessTLASRootTableIndex = totalRootTableNum;
 
         return pDxRayTracingPipelineState;
     }
@@ -1623,13 +1677,6 @@ namespace hwrtl
         // create pipeline state
         {
             ID3DBlobPtr shaders[2];
-
-#if ENABLE_PIX_FRAME_CAPTURE
-            UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#else
-            UINT compileFlags = 0;
-#endif
-
             for (uint32_t index = 0; index < rtShaders.size(); index++)
             {
                 bool bVS = rtShaders[index].m_eShaderType == ERayShaderType::RS_VS;
@@ -2004,30 +2051,7 @@ namespace hwrtl
                     auto& gpuMeshDataIns = gpuMeshData[indexMesh];
                     const SMeshInstanceInfo& meshInstanceInfo = gpuMeshDataIns->instanes[indexInstance];
                     
-                    SMeshInstanceGpuData meshInstanceGpuData;
-                    {
-                        meshInstanceGpuData.m_worldTM.SetIdentity();
-                        for (uint32_t i = 0; i < 4; i++)
-                        {
-                            for (uint32_t j = 0; j < 3; j++)
-                            {
-                                meshInstanceGpuData.m_worldTM.m[i][j] = gpuMeshDataIns->instanes[indexInstance].m_transform[j][i];
-                            }
-                        }
-                        meshInstanceGpuData.m_ibStride = gpuMeshDataIns->m_nIndexStride;
-                        if (gpuMeshDataIns->m_nIndexStride > 0)
-                        {
-                            meshInstanceGpuData.m_ibIndex = gpuMeshDataIns->m_pIndexBuffer->GetOrAddVBIBBindlessIndex();
-                        }
-                        else
-                        {
-                            meshInstanceGpuData.m_ibIndex = 0;
-                        }
-                        meshInstanceGpuData.m_vbIndex = gpuMeshDataIns->m_pVertexBuffer->GetOrAddVBIBBindlessIndex();
-                    }
-
-                    dxTLAS->m_sceneInstanceData.push_back(meshInstanceGpuData);
-                    instanceDescs[indexMesh].InstanceID = 0;
+                    instanceDescs[indexMesh].InstanceID = meshInstanceInfo.m_instanceID;
                     instanceDescs[indexMesh].InstanceContributionToHitGroupIndex = 0;
                     instanceDescs[indexMesh].Flags = Dx12ConvertInstanceFlag(meshInstanceInfo.m_instanceFlag);
                     memcpy(instanceDescs[indexMesh].Transform, &meshInstanceInfo.m_transform, sizeof(instanceDescs[indexMesh].Transform));
@@ -2054,8 +2078,6 @@ namespace hwrtl
             pCmdList->ResourceBarrier(1, &uavBarrier);
 
             dxTLAS->m_ptlas = pResult;
-
-            dxTLAS->m_instanceGpuData = CreateBuffer(dxTLAS->m_sceneInstanceData.data(), sizeof(SMeshInstanceGpuData) * dxTLAS->m_sceneInstanceData.size(), sizeof(SMeshInstanceGpuData), EBufferUsage::USAGE_Structure);
 
             Dx12CloseAndExecuteCmdListInternal();
             Dx12WaitGPUCmdListFinishInternal();
@@ -2227,9 +2249,11 @@ namespace hwrtl
         }
 
         m_bPipelineStateDirty = true;
-        m_bindlessRootTableIndex = dxRayTracingPSO->m_bindlessRootTableIndex;
-        m_gpuInstanceDataRootTableIndex = m_bindlessRootTableIndex + 1;
-        m_rootConstantTableIndex = m_gpuInstanceDataRootTableIndex + 1;
+
+        m_bindlessTLASRootTableIndex = dxRayTracingPSO->m_bindlessTLASRootTableIndex;
+        m_gpuInstanceDataRootTableIndex = m_bindlessTLASRootTableIndex + 1;
+        m_bindlessTexRootTableIndex = m_bindlessTLASRootTableIndex + 2;
+        m_rootConstantTableIndex = m_bindlessTLASRootTableIndex + 3;
     }
 
     void CDx12RayTracingContext::SetTLAS(std::shared_ptr<CTopLevelAccelerationStructure> tlas, uint32_t bindIndex)
@@ -2239,28 +2263,33 @@ namespace hwrtl
         m_bViewTableDirty[uint32_t(ESlotType::ST_T)] = true;
 
        
-        D3D12_CPU_DESCRIPTOR_HANDLE m_bindlessHandlesStart = pDXDevice->m_bindlessDescManager.GetCPUHandle(0);
-        if (m_bindlessHandles.size() == 0)
+        D3D12_CPU_DESCRIPTOR_HANDLE m_bindlessHandlesStart = pDXDevice->m_bindlessByteAddressDescManager.GetCPUHandle(0);
+        if (m_bindlessTLASHandles.size() == 0)
         {
             m_bBindlessTableDirty = true;
         }
 
-        if (m_bindlessHandles.size() > 0 && m_bindlessHandles[0].ptr != m_bindlessHandlesStart.ptr)
+        if (m_bindlessTLASHandles.size() > 0 && m_bindlessTLASHandles[0].ptr != m_bindlessHandlesStart.ptr)
+        {
+            m_bBindlessTableDirty = true;
+        }
+
+        if (m_bindlessNum != pDXDevice->m_bindlessByteAddressDescManager.GetCurrentHandleNum())
         {
             m_bBindlessTableDirty = true;
         }
 
         if (m_bBindlessTableDirty)
         {
-            m_bindlessNum = pDXDevice->m_bindlessDescManager.GetCurrentHandleNum();
-            m_bindlessHandles.resize(m_bindlessNum);
+            m_bindlessNum = pDXDevice->m_bindlessByteAddressDescManager.GetCurrentHandleNum();
+            m_bindlessTLASHandles.resize(m_bindlessNum);
             for (uint32_t index = 0; index < m_bindlessNum; index++)
             {
-                m_bindlessHandles[index] = pDXDevice->m_bindlessDescManager.GetCPUHandle(index);
+                m_bindlessTLASHandles[index] = pDXDevice->m_bindlessByteAddressDescManager.GetCPUHandle(index);
             }
         }
-
-        m_gpuInstanceDataPtr = static_cast<CDxBuffer*>(pDxTex2D->m_instanceGpuData.get())->m_dxResource.m_pResource->GetGPUVirtualAddress();
+        
+        //m_gpuInstanceDataPtr = static_cast<CDxBuffer*>(pDxTex2D->m_instanceGpuData.get())->m_dxResource.m_pResource->GetGPUVirtualAddress();
     }
 
     void CDx12RayTracingContext::SetShaderSRV(std::shared_ptr<CTexture2D>tex2D, uint32_t bindIndex)
@@ -2331,8 +2360,8 @@ namespace hwrtl
         }
         
 
-        assert((m_gpuInstanceDataPtr != 0) && "you must set gpu instance data handle");
-        pCommandList->SetComputeRootShaderResourceView(m_gpuInstanceDataRootTableIndex, m_gpuInstanceDataPtr);
+        //assert((m_gpuInstanceDataPtr != 0) && "you must set gpu instance data handle");
+        //pCommandList->SetComputeRootShaderResourceView(m_gpuInstanceDataRootTableIndex, m_gpuInstanceDataPtr);
 
         pDXDevice->dxBarrierManager.FlushResourceBarrier(pCommandList);
 
@@ -2380,10 +2409,10 @@ namespace hwrtl
             auto pCommandList = pDXDevice->m_pCmdList;
             uint32_t startIndex = m_rtPassDescManager.GetAndAddCurrentPassSlotStart(m_bindlessNum);
             D3D12_CPU_DESCRIPTOR_HANDLE destCPUHandle = m_rtPassDescManager.GetCPUHandle(startIndex);
-            pDXDevice->m_pDevice->CopyDescriptors(1, &destCPUHandle, &m_bindlessNum, m_bindlessNum, m_bindlessHandles.data(), nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            pDXDevice->m_pDevice->CopyDescriptors(1, &destCPUHandle, &m_bindlessNum, m_bindlessNum, m_bindlessTLASHandles.data(), nullptr, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
             D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle = m_rtPassDescManager.GetGPUHandle(startIndex);
-            pCommandList->SetComputeRootDescriptorTable(m_bindlessRootTableIndex, gpuDescHandle);
+            pCommandList->SetComputeRootDescriptorTable(m_bindlessTLASRootTableIndex, gpuDescHandle);
 
             m_bBindlessTableDirty = false;
         }

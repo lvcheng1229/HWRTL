@@ -168,8 +168,8 @@ struct SMeshInstanceGpuData
     uint unused;
 };
 
-ByteAddressBuffer bindlessByteAddressBuffer[] : register(t0, space1);
-StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t0, space2);
+ByteAddressBuffer bindlessByteAddressBuffer[] : BINDLESS_BYTE_ADDRESS_BUFFER_REGISTER;
+//StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t0, space2);
 
 struct SRtRenderPassInfo
 {
@@ -192,6 +192,7 @@ RaytracingAccelerationStructure rtScene : register(t0);
 Texture2D<float4> rtWorldPosition : register(t1);
 Texture2D<float4> rtWorldNormal : register(t2);
 StructuredBuffer<SRayTracingLight> rtSceneLights : register(t3);
+StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t4);
 
 RWTexture2D<float4> irradianceAndValidSampleCount : register(u0);
 RWTexture2D<float4> shDirectionality : register(u1);
@@ -1085,7 +1086,7 @@ void LightMapRayTracingRayGen()
 void MaterialClosestHitMain(inout SMaterialClosestHitPayload payload, in SRayTracingIntersectionAttributes attributes)
 {
     const float3 barycentrics = float3(1.0 - attributes.x - attributes.y, attributes.x, attributes.y);
-    SMeshInstanceGpuData meshInstanceGpuData = rtSceneInstanceGpuData[InstanceIndex()];
+    SMeshInstanceGpuData meshInstanceGpuData = rtSceneInstanceGpuData[InstanceID()];
 
     const float4x4 worldTM = meshInstanceGpuData.m_worldTM;
     const uint ibStride = meshInstanceGpuData.ibStride;
