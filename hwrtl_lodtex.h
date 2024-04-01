@@ -58,10 +58,17 @@ namespace hlod
 		std::shared_ptr<CTexture2D> m_pNormalTexture;
 	};
 
+
 	struct SHLODTextureOutData
 	{
-
+		void* destBaseColorOutputData = nullptr;
+		void* destNormalOutputData = nullptr;
+		uint32_t m_texByteSize = 0;
+		uint32_t m_pixelStride = 0;
+		Vec2i m_texSize;
 	};
+
+	std::shared_ptr<CTexture2D> CreateHighPolyTexture2D(STextureCreateDesc texCreateDesc);
 
 	void InitHLODTextureBaker(SHLODConfig hlodConfig);
 	void SetHLODMesh(const SHLODBakerMeshDesc& hlodMeshDesc);

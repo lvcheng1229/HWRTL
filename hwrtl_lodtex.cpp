@@ -27,6 +27,19 @@ namespace hwrtl
 {
 namespace hlod
 {
+	struct SMeshInstanceGpuData
+	{
+		Matrix44 m_worldTM;
+
+		uint32_t m_ibStride;
+		uint32_t m_ibIndex;
+		uint32_t m_vbIndex;
+		uint32_t uvBufferIndex;
+
+		uint32_t highPolyBaseColorIndex;
+		uint32_t highPolyNormalIndex;
+	};
+
 	struct CHLODBakerContext
 	{
 		std::shared_ptr<CBuffer> m_pConstantBuffer;
@@ -72,6 +85,8 @@ namespace hlod
 		SHLODConfig m_hlodConfig;
 
 		std::shared_ptr<CTopLevelAccelerationStructure> m_pTLAS;
+		std::vector<SMeshInstanceGpuData> m_sceneInstanceData;
+		std::shared_ptr<CBuffer> m_instanceGpuData;
 
 		std::shared_ptr<CTexture2D> m_pPosTexture;
 		std::shared_ptr<CTexture2D> m_pNormalTexture;
@@ -135,8 +150,13 @@ namespace hlod
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_CHS,L"HLODClosestHitMain" });
 		rtShaders.push_back(SShader{ ERayShaderType::RAY_MIH,L"HLODRayMiassMain" });
 
-		SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 0,0,0,0 ,0} ,nullptr,0 };
+		SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 4,2,0,0,0,true,true} ,nullptr,0 };
 		pHLODTextureBaker->m_pRayTracingPSO = CHLODTextureBaker::GetDeviceCommand()->CreateRTPipelineStateAndShaderTable(rtPsoCreateDesc);
+	}
+
+	std::shared_ptr<CTexture2D> hwrtl::hlod::CreateHighPolyTexture2D(STextureCreateDesc texCreateDesc)
+	{
+		return CHLODTextureBaker::GetDeviceCommand()->CreateTexture2D(texCreateDesc);
 	}
 
 	void InitHLODTextureBaker(SHLODConfig hlodConfig)
@@ -145,7 +165,7 @@ namespace hlod
 		pHLODTextureBaker = new CHLODTextureBaker();
 		pHLODTextureBaker->m_hlodConfig = hlodConfig;
 		pHLODTextureBaker->Init();
-		
+
 		InitHLODMeshGBufferPass();
 		InitHLODTextureRayTracingBakePass();
 	}
@@ -203,6 +223,48 @@ namespace hlod
 		}
 
 		CHLODTextureBaker::GetDeviceCommand()->BuildBottomLevelAccelerationStructure(pHLODTextureBaker->m_hlodBakerContext.m_pGpuBlasDataArray);
+		std::vector< std::shared_ptr<SGpuBlasData>>& inoutGPUMeshData = pHLODTextureBaker->m_hlodBakerContext.m_pGpuBlasDataArray;
+		{
+			for (uint32_t indexMesh = 0; indexMesh < inoutGPUMeshData.size(); indexMesh++)
+			{
+				for (uint32_t indexInstance = 0; indexInstance < inoutGPUMeshData[indexMesh]->instanes.size(); indexInstance++)
+				{
+					auto& gpuMeshDataIns = inoutGPUMeshData[indexMesh];
+					SMeshInstanceInfo& meshInstanceInfo = gpuMeshDataIns->instanes[indexInstance];
+					meshInstanceInfo.m_instanceID = pHLODTextureBaker->m_sceneInstanceData.size();
+
+					SMeshInstanceGpuData meshInstanceGpuData;
+					{
+						meshInstanceGpuData.m_worldTM.SetIdentity();
+						for (uint32_t i = 0; i < 4; i++)
+						{
+							for (uint32_t j = 0; j < 3; j++)
+							{
+								meshInstanceGpuData.m_worldTM.m[i][j] = gpuMeshDataIns->instanes[indexInstance].m_transform[j][i];
+							}
+						}
+						meshInstanceGpuData.m_ibStride = gpuMeshDataIns->m_nIndexStride;
+						if (gpuMeshDataIns->m_nIndexStride > 0)
+						{
+							meshInstanceGpuData.m_ibIndex = gpuMeshDataIns->m_pIndexBuffer->GetOrAddByteAddressBindlessIndex();
+						}
+						else
+						{
+							meshInstanceGpuData.m_ibIndex = 0;
+						}
+
+						meshInstanceGpuData.m_vbIndex = gpuMeshDataIns->m_pVertexBuffer->GetOrAddByteAddressBindlessIndex();
+						meshInstanceGpuData.uvBufferIndex = pHLODTextureBaker->m_hlodBakerContext.m_pInputTextureCoords[indexMesh]->GetOrAddByteAddressBindlessIndex();
+						meshInstanceGpuData.highPolyBaseColorIndex = pHLODTextureBaker->m_hlodBakerContext.m_pInputBaseColoeTexture2Ds[indexMesh]->GetOrAddTexBindlessIndex();
+						meshInstanceGpuData.highPolyNormalIndex = pHLODTextureBaker->m_hlodBakerContext.m_pInputNormalTexture2Ds[indexMesh]->GetOrAddTexBindlessIndex();
+					}
+					pHLODTextureBaker->m_sceneInstanceData.push_back(meshInstanceGpuData);
+				}
+			}
+			pHLODTextureBaker->m_instanceGpuData = CHLODTextureBaker::GetDeviceCommand()->CreateBuffer(
+				pHLODTextureBaker->m_sceneInstanceData.data(), sizeof(SMeshInstanceGpuData) * pHLODTextureBaker->m_sceneInstanceData.size(),
+				sizeof(SMeshInstanceGpuData), EBufferUsage::USAGE_Structure);
+		}
 		pHLODTextureBaker->m_pTLAS = CHLODTextureBaker::GetDeviceCommand()->BuildTopAccelerationStructure(pHLODTextureBaker->m_hlodBakerContext.m_pGpuBlasDataArray);
 	}
 
@@ -229,17 +291,49 @@ namespace hlod
 			CHLODTextureBaker::GetGraphicsContext()->SetVertexBuffers(vertexBuffers);
 			CHLODTextureBaker::GetGraphicsContext()->DrawInstanced(bakeContext.m_nVertexCount, 1, 0, 0);
 		}
-		
 
 		{
 			CHLODTextureBaker::GetRayTracingContext()->BeginRayTacingPasss();
 			CHLODTextureBaker::GetRayTracingContext()->SetRayTracingPipelineState(pHLODTextureBaker->m_pRayTracingPSO);
+			CHLODTextureBaker::GetRayTracingContext()->SetShaderUAV(pHLODTextureBaker->m_hlodBakerContext.m_pResultBaseColorTexture2D, 0);
+			CHLODTextureBaker::GetRayTracingContext()->SetShaderUAV(pHLODTextureBaker->m_hlodBakerContext.m_pResultNormalTexture2D, 1);
+			CHLODTextureBaker::GetRayTracingContext()->SetTLAS(pHLODTextureBaker->m_pTLAS, 0);
+			CHLODTextureBaker::GetRayTracingContext()->SetShaderSRV(pHLODTextureBaker->m_pPosTexture, 1);
+			CHLODTextureBaker::GetRayTracingContext()->SetShaderSRV(pHLODTextureBaker->m_pNormalTexture, 2);
+			CHLODTextureBaker::GetRayTracingContext()->SetShaderSRV(pHLODTextureBaker->m_instanceGpuData, 4);
+			CHLODTextureBaker::GetRayTracingContext()->DispatchRayTracicing(pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.x, pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.y);
 			CHLODTextureBaker::GetRayTracingContext()->EndRayTacingPasss();
-
 		}
 	}
 
+	void GetHLODTextureData(SHLODTextureOutData& hlodTextureData)
+	{
+		uint32_t imageSize = pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.x * pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.y * sizeof(uint8_t) * 4;
+		hlodTextureData.destBaseColorOutputData = malloc(imageSize);
+		hlodTextureData.destNormalOutputData = malloc(imageSize);
 
+		void* lockedBaseColorData = CHLODTextureBaker::GetDeviceCommand()->LockTextureForRead(pHLODTextureBaker->m_hlodBakerContext.m_pResultBaseColorTexture2D);
+		void* lockedNormalData = CHLODTextureBaker::GetDeviceCommand()->LockTextureForRead(pHLODTextureBaker->m_hlodBakerContext.m_pResultNormalTexture2D);
+
+		if (imageSize != 0)
+		{
+			memcpy(hlodTextureData.destBaseColorOutputData, lockedBaseColorData, imageSize);
+			memcpy(hlodTextureData.destNormalOutputData, lockedNormalData, imageSize);
+		}
+
+		CHLODTextureBaker::GetDeviceCommand()->UnLockTexture(pHLODTextureBaker->m_hlodBakerContext.m_pResultBaseColorTexture2D);
+		CHLODTextureBaker::GetDeviceCommand()->UnLockTexture(pHLODTextureBaker->m_hlodBakerContext.m_pResultNormalTexture2D);
+
+		hlodTextureData.m_texByteSize = imageSize;
+		hlodTextureData.m_pixelStride = sizeof(uint8_t) * 4;
+		hlodTextureData.m_texSize = pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize;
+	}
+
+	void DeleteHLODBaker()
+	{
+		delete pHLODTextureBaker;
+		Shutdown();
+	}
 
 }
 }

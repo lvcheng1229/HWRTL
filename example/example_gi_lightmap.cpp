@@ -29,7 +29,7 @@ using namespace hwrtl;
 using namespace hwrtl::gi;
 
 #pragma warning (disable: 4996)
-
+/*
 void CreateBoxMesh(uint32_t boxVertexCount, uint32_t boxLightMapSizeX, uint32_t boxLightMapSizeY, std::vector<Vec3>& boxGeoPositions, std::vector<Vec2>&boxGeoLightMapUV, std::vector<Vec3>& normals)
 {
     boxGeoPositions.resize(boxVertexCount);
@@ -386,6 +386,7 @@ void ExampleDestroyScene()
     backPlaneGeoNormals.~vector();
 }
 
+//int LightMapExampleEntry()
 int main()
 {
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
@@ -473,4 +474,4 @@ int main()
     }
     _CrtDumpMemoryLeaks();
     return 0;
-}
+}*/

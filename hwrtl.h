@@ -279,6 +279,7 @@ namespace hwrtl
 		ETexFormat m_eTexFormat;
 		uint32_t m_width;
 		uint32_t m_height;
+		uint8_t* m_srcData;
 	};
 
 	struct SShaderResources

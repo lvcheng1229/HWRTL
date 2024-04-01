@@ -565,7 +565,7 @@ namespace gi
             shaderDefines.m_defineValue = std::wstring(L"0");
         }
         
-        SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 5,2,1,0 ,1} ,&shaderDefines,1 };
+        SRayTracingPSOCreateDesc rtPsoCreateDesc = { shaderPath, rtShaders, 1, SShaderResources{ 5,2,1,0 ,1,false,true} ,&shaderDefines,1 };
         pGiBaker->m_pRayTracingPSO = CGIBaker::GetDeviceCommand()->CreateRTPipelineStateAndShaderTable(rtPsoCreateDesc);
 
         CGIBaker::GetDeviceCommand()->CloseAndExecuteCmdList();

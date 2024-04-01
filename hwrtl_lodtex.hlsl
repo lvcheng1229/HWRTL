@@ -1,3 +1,5 @@
+SamplerState gSamPointWarp : register(s0, space1000);
+
 struct SGeometryApp2VS
 {
 	float3 m_posistion    : TEXCOORD0;
@@ -42,8 +44,9 @@ SHLODGBufferOutput HLODGBufferGenPS(SGeometryVS2PS IN)
 }
 
 
-
-
+#define RAY_TRACING_MASK_OPAQUE				0x01
+#define RT_HLOAD_CHS_SHADER_INDEX            0
+#define RT_MAX_HIT_T 1e30
 
 struct SRayTracingIntersectionAttributes
 {
@@ -53,32 +56,36 @@ struct SRayTracingIntersectionAttributes
 
 struct SHLODClosestHitPayload
 {
-    float3 m_worldPosition;
+    float2 uv;
+    uint baseColorIndex;
+    uint normalIndex;
+    float m_vHiTt;
 };
 
 struct SMeshInstanceGpuData
 {   
     float4x4 m_worldTM;
+    
     uint ibStride;
     uint ibIndex;
     uint vbIndex;
-    uint unused;
+    uint uvBufferIndex;
+
+    uint highPolyBaseColorIndex;
+    uint highPolyNormalIndex;
 };
 
-#define TEX_BUFFER_ARRAY_MAX_NUM 32
 
 RaytracingAccelerationStructure rtScene : register(t0);
 Texture2D<float4> rtWorldPosition : register(t1);
 Texture2D<float4> rtWorldNormal : register(t2);
+StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t3);
 
-ByteAddressBuffer uvBufferArray[TEX_BUFFER_ARRAY_MAX_NUM] : register(t3);
-Texture2D<float4> highPolyBaseColorTexArray[TEX_BUFFER_ARRAY_MAX_NUM] : register(t4);
-Texture2D<float4> highPolyNormalTexArray[TEX_BUFFER_ARRAY_MAX_NUM] : register(t5);
+ByteAddressBuffer bindlessByteAddressBuffer[] : BINDLESS_BYTE_ADDRESS_BUFFER_REGISTER;
+Texture2D<float4> highPolyBindlessTexture[] : BINDLESS_TEXTURE_REGISTER;
 
 RWTexture2D<float4> outputBaseColor : register(u0);
-RWTexture2D<float4> outputNormal : register(u0);
-
-StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t0, space2);
+RWTexture2D<float4> outputNormal : register(u1);
 
 [shader("raygeneration")]
 void HLODRayTracingRayGen()
@@ -93,8 +100,44 @@ void HLODRayTracingRayGen()
         return;
     }
 
-    outputBaseColor[rayIndex].rgba = float4(0,0,0,0);
-    outputNormal[rayIndex].rgba = float4(0,0,0,0);
+    SHLODClosestHitPayload hlodClosestFrontPayload = (SHLODClosestHitPayload)0;
+    SHLODClosestHitPayload hlodClosestBackPayload = (SHLODClosestHitPayload)0;
+
+    RayDesc forntRay;
+    forntRay.Origin = worldPosition + normalize(worldFaceNormal);
+    forntRay.Direction = normalize(worldFaceNormal);
+    forntRay.TMin = 0.0f;
+    forntRay.TMax = RT_MAX_HIT_T;
+    TraceRay(rtScene, RAY_FLAG_FORCE_OPAQUE, RAY_TRACING_MASK_OPAQUE, RT_HLOAD_CHS_SHADER_INDEX, 1, 0, forntRay, hlodClosestFrontPayload);
+
+    RayDesc backRay = forntRay;
+    backRay.Direction = -forntRay.Direction;
+    TraceRay(rtScene, RAY_FLAG_FORCE_OPAQUE, RAY_TRACING_MASK_OPAQUE, RT_HLOAD_CHS_SHADER_INDEX, 1, 0, backRay, hlodClosestBackPayload);
+
+    float2 minHitUV = hlodClosestFrontPayload.uv;
+    uint minHitBaseColorIndex = hlodClosestFrontPayload.baseColorIndex;
+    uint minHitNormalIndex = hlodClosestFrontPayload.normalIndex;
+    float minHitT = hlodClosestFrontPayload.m_vHiTt;
+
+    if(hlodClosestBackPayload.m_vHiTt < hlodClosestFrontPayload.m_vHiTt)
+    {
+        minHitUV = hlodClosestBackPayload.uv;
+        minHitBaseColorIndex = hlodClosestBackPayload.baseColorIndex;
+        minHitNormalIndex = hlodClosestBackPayload.normalIndex;
+        minHitT = hlodClosestBackPayload.m_vHiTt;
+    }
+
+    if(RT_MAX_HIT_T != minHitT)
+    {
+        outputBaseColor[rayIndex].rgba = highPolyBindlessTexture[minHitBaseColorIndex].SampleLevel(gSamPointWarp, minHitUV , 0.0).xyzw;
+        outputNormal[rayIndex].rgba = highPolyBindlessTexture[minHitNormalIndex].SampleLevel(gSamPointWarp, minHitUV , 0.0).xyzw;
+    }
+    else
+    {
+        outputBaseColor[rayIndex].rgba = float4(0,0,0,0);
+        outputNormal[rayIndex].rgba = float4(0,0,0,0);
+    }
+
 }
 
 [shader("closesthit")]
@@ -107,15 +150,41 @@ void HLODClosestHitMain(inout SHLODClosestHitPayload payload, in SRayTracingInte
     const uint ibStride = meshInstanceGpuData.ibStride;
     const uint ibIndex = meshInstanceGpuData.ibIndex;
     const uint vbIndex = meshInstanceGpuData.vbIndex;
+    const uint uvBufferIndex = meshInstanceGpuData.uvBufferIndex;
+    const uint highPolyBaseColorIndex = meshInstanceGpuData.highPolyBaseColorIndex;
+    const uint highPolyNormalIndex = meshInstanceGpuData.highPolyNormalIndex;
 
-    uint instanceID = InstanceID();
+    uint primitiveIndex = PrimitiveIndex();
+    uint baseIndex = primitiveIndex * 3;
 
+    uint3 indices;
+    if(ibStride == 0) // dont have index buffer
+    {
+        indices = uint3(baseIndex, baseIndex + 1, baseIndex + 2);
+    }
+    else if(ibStride == 2) // 16 bit
+    {
+        // todo
+    }
+    else // 32 bit
+    {
+        // todo
+    }
 
-    float3 worldPosition = wolrdPosition0 * barycentrics.x + wolrdPosition1 * barycentrics.y + wolrdPosition2 * barycentrics.z;
+    float2 uv0 = asfloat(bindlessByteAddressBuffer[uvBufferIndex].Load<float2>(indices.x * 8));
+    float2 uv1 = asfloat(bindlessByteAddressBuffer[uvBufferIndex].Load<float2>(indices.y * 8));
+    float2 uv2 = asfloat(bindlessByteAddressBuffer[uvBufferIndex].Load<float2>(indices.z * 8));
+
+    float2 uv = uv0 * barycentrics.x + uv1 * barycentrics.y + uv2 * barycentrics.z;
+
+    payload.uv = uv;
+    payload.baseColorIndex = highPolyBaseColorIndex;
+    payload.normalIndex = highPolyNormalIndex;
+    payload.m_vHiTt = RayTCurrent();;
 }
 
 [shader("miss")]
 void HLODRayMiassMain(inout SHLODClosestHitPayload payload)
 {
-   
+   payload.m_vHiTt = RT_MAX_HIT_T;
 }

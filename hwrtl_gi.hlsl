@@ -169,7 +169,6 @@ struct SMeshInstanceGpuData
 };
 
 ByteAddressBuffer bindlessByteAddressBuffer[] : BINDLESS_BYTE_ADDRESS_BUFFER_REGISTER;
-//StructuredBuffer<SMeshInstanceGpuData> rtSceneInstanceGpuData : register(t0, space2);
 
 struct SRtRenderPassInfo
 {
@@ -178,7 +177,7 @@ struct SRtRenderPassInfo
     uint rpInfoPadding1;
     uint rpInfoPadding2;
 };
-ConstantBuffer<SRtRenderPassInfo> rtRenderPassInfo : register(b0, space2);
+ConstantBuffer<SRtRenderPassInfo> rtRenderPassInfo : register(b0, ROOT_CONSTANT_SPACE);
 
 cbuffer CRtGlobalConstantBuffer : register(b0)
 {
