@@ -192,9 +192,10 @@ namespace hlod
 
 		pHLODTextureBaker->m_hlodBakerContext.m_pConstantBuffer = CHLODTextureBaker::GetDeviceCommand()->CreateBuffer(&gBufferCbData, sizeof(SHLODGbufferGenPerGeoCB), sizeof(SHLODGbufferGenPerGeoCB), EBufferUsage::USAGE_CB);
 
-		STextureCreateDesc resultTexCreateDesc{ ETexUsage::USAGE_SRV | ETexUsage::USAGE_RTV,ETexFormat::FT_RGBA8_UNORM,pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.x, pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.y };
+		STextureCreateDesc resultTexCreateDesc{ ETexUsage::USAGE_UAV,ETexFormat::FT_RGBA8_UNORM,pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.x, pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.y };
 		pHLODTextureBaker->m_hlodBakerContext.m_pResultBaseColorTexture2D = CHLODTextureBaker::GetDeviceCommand()->CreateTexture2D(resultTexCreateDesc);
 		pHLODTextureBaker->m_hlodBakerContext.m_pResultNormalTexture2D = CHLODTextureBaker::GetDeviceCommand()->CreateTexture2D(resultTexCreateDesc);
+		pHLODTextureBaker->m_hlodBakerContext.m_nVertexCount = hlodMeshDesc.m_nVertexCount;
 	}
 
 	void SetHighPolyMesh(const std::vector<SHLODHighPolyMeshDesc>& highMeshDescs)
@@ -202,7 +203,8 @@ namespace hlod
 		pHLODTextureBaker->m_hlodBakerContext.m_pGpuBlasDataArray.resize(highMeshDescs.size());
 		pHLODTextureBaker->m_hlodBakerContext.m_pInputBaseColoeTexture2Ds.resize(highMeshDescs.size());
 		pHLODTextureBaker->m_hlodBakerContext.m_pInputNormalTexture2Ds.resize(highMeshDescs.size());
-		
+		pHLODTextureBaker->m_hlodBakerContext.m_pInputTextureCoords.resize(highMeshDescs.size());
+
 		for (uint32_t index = 0; index < highMeshDescs.size(); index++)
 		{
 			const SHLODHighPolyMeshDesc& hlodBakerMeshDesc = highMeshDescs[index];
@@ -290,6 +292,7 @@ namespace hlod
 			CHLODTextureBaker::GetGraphicsContext()->SetConstantBuffer(bakeContext.m_pConstantBuffer, 0);
 			CHLODTextureBaker::GetGraphicsContext()->SetVertexBuffers(vertexBuffers);
 			CHLODTextureBaker::GetGraphicsContext()->DrawInstanced(bakeContext.m_nVertexCount, 1, 0, 0);
+			CHLODTextureBaker::GetGraphicsContext()->EndRenderPasss();
 		}
 
 		{
@@ -300,7 +303,7 @@ namespace hlod
 			CHLODTextureBaker::GetRayTracingContext()->SetTLAS(pHLODTextureBaker->m_pTLAS, 0);
 			CHLODTextureBaker::GetRayTracingContext()->SetShaderSRV(pHLODTextureBaker->m_pPosTexture, 1);
 			CHLODTextureBaker::GetRayTracingContext()->SetShaderSRV(pHLODTextureBaker->m_pNormalTexture, 2);
-			CHLODTextureBaker::GetRayTracingContext()->SetShaderSRV(pHLODTextureBaker->m_instanceGpuData, 4);
+			CHLODTextureBaker::GetRayTracingContext()->SetShaderSRV(pHLODTextureBaker->m_instanceGpuData, 3);
 			CHLODTextureBaker::GetRayTracingContext()->DispatchRayTracicing(pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.x, pHLODTextureBaker->m_hlodConfig.m_nHLODTextureSize.y);
 			CHLODTextureBaker::GetRayTracingContext()->EndRayTacingPasss();
 		}

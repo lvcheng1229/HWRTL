@@ -50,7 +50,7 @@ std::vector<uint8_t> GenerateTextureData0(uint32_t texWidth, uint32_t texHeight,
         if (i % 2 == j % 2)
         {
             pData[n] = 0x00;        // R
-            pData[n + 1] = 0x00;    // G
+            pData[n + 1] = 0xff;    // G
             pData[n + 2] = 0x00;    // B
             pData[n + 3] = 0xff;    // A
         }
@@ -204,10 +204,11 @@ void CreateAndAddScene(SHLODBakerMeshDesc& bakeMeshDescs, std::vector<SHLODHighP
         bakeMeshDescs.m_nVertexCount = boxVertexCount;
         bakeMeshDescs.m_bakedTextureSize = Vec2i(boxTexSizeX, boxTexSizeY);
         bakeMeshDescs.m_meshInstanceInfo = SMeshInstanceInfo();
-        bakeMeshDescs.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
+        bakeMeshDescs.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::CULL_DISABLE;
     }
     
-    highPolyMeshs.resize(2);
+    //highPolyMeshs.resize(2);
+    highPolyMeshs.resize(1);
 
     tex0DataGlobal = GenerateTextureData0(boxTexSizeX, boxTexSizeY, 4);
     tex1DataGlobal = GenerateTextureData1(boxTexSizeX, boxTexSizeY, 4);
@@ -225,7 +226,7 @@ void CreateAndAddScene(SHLODBakerMeshDesc& bakeMeshDescs, std::vector<SHLODHighP
     tex1Desc.m_height = boxTexSizeY;
     tex1Desc.m_eTexFormat = ETexFormat::FT_RGBA8_UNORM;
     tex1Desc.m_eTexUsage = ETexUsage::USAGE_SRV;
-    tex1Desc.m_srcData = tex0DataGlobal.data();
+    tex1Desc.m_srcData = tex1DataGlobal.data();
     std::shared_ptr<CTexture2D> highPolyTexture2D1 = CreateHighPolyTexture2D(tex1Desc);
     
 
@@ -236,37 +237,37 @@ void CreateAndAddScene(SHLODBakerMeshDesc& bakeMeshDescs, std::vector<SHLODHighP
         highPolyMesh1.m_pUVData = box1BakeHighPolyGeoUVs.data();
         highPolyMesh1.m_nVertexCount = boxVertexCount;
         highPolyMesh1.m_meshInstanceInfo = SMeshInstanceInfo();
-        highPolyMesh1.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
+        highPolyMesh1.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::CULL_DISABLE;
         highPolyMesh1.m_pBaseColorTexture = highPolyTexture2D0;
         highPolyMesh1.m_pNormalTexture = highPolyTexture2D1;
 
         // Scale
-        highPolyMesh1.m_meshInstanceInfo.m_transform[0][0] = 1.5;
-        highPolyMesh1.m_meshInstanceInfo.m_transform[1][1] = 1.5;
-        highPolyMesh1.m_meshInstanceInfo.m_transform[2][2] = 1.5;
+        //highPolyMesh1.m_meshInstanceInfo.m_transform[0][0] = 1.5;
+        //highPolyMesh1.m_meshInstanceInfo.m_transform[1][1] = 1.5;
+        //highPolyMesh1.m_meshInstanceInfo.m_transform[2][2] = 1.5;
         highPolyMeshs[0] = highPolyMesh1;
     }
 
-    {
-        CreateBoxMesh(boxVertexCount, boxTexSizeX, boxTexSizeY, box2BakeHighPolyGeoPositions, box2BakeHighPolyGeoUVs);
-        SHLODHighPolyMeshDesc highPolyMesh2;
-        highPolyMesh2.m_pPositionData = box1BakeHighPolyGeoPositions.data();
-        highPolyMesh2.m_pUVData = box1BakeHighPolyGeoUVs.data();
-        highPolyMesh2.m_nVertexCount = boxVertexCount;
-        highPolyMesh2.m_meshInstanceInfo = SMeshInstanceInfo();
-        highPolyMesh2.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::FRONTFACE_CCW;
-        highPolyMesh2.m_pBaseColorTexture = highPolyTexture2D0;
-        highPolyMesh2.m_pNormalTexture = highPolyTexture2D1;
-
-        // Scale
-        highPolyMesh2.m_meshInstanceInfo.m_transform[0][0] = 0.5;
-        highPolyMesh2.m_meshInstanceInfo.m_transform[1][1] = 0.5;
-        highPolyMesh2.m_meshInstanceInfo.m_transform[2][2] = 0.5;
-
-        highPolyMesh2.m_meshInstanceInfo.m_transform[0][3] = 1;
-
-        highPolyMeshs[1] = highPolyMesh2;
-    }
+    //{
+    //    CreateBoxMesh(boxVertexCount, boxTexSizeX, boxTexSizeY, box2BakeHighPolyGeoPositions, box2BakeHighPolyGeoUVs);
+    //    SHLODHighPolyMeshDesc highPolyMesh2;
+    //    highPolyMesh2.m_pPositionData = box1BakeHighPolyGeoPositions.data();
+    //    highPolyMesh2.m_pUVData = box1BakeHighPolyGeoUVs.data();
+    //    highPolyMesh2.m_nVertexCount = boxVertexCount;
+    //    highPolyMesh2.m_meshInstanceInfo = SMeshInstanceInfo();
+    //    highPolyMesh2.m_meshInstanceInfo.m_instanceFlag = EInstanceFlag::CULL_DISABLE;
+    //    highPolyMesh2.m_pBaseColorTexture = highPolyTexture2D0;
+    //    highPolyMesh2.m_pNormalTexture = highPolyTexture2D1;
+    //
+    //    // Scale
+    //    highPolyMesh2.m_meshInstanceInfo.m_transform[0][0] = 0.5;
+    //    highPolyMesh2.m_meshInstanceInfo.m_transform[1][1] = 0.5;
+    //    highPolyMesh2.m_meshInstanceInfo.m_transform[2][2] = 0.5;
+    //
+    //    highPolyMesh2.m_meshInstanceInfo.m_transform[0][3] = 1.5;
+    //
+    //    highPolyMeshs[1] = highPolyMesh2;
+    //}
    
 }
 
@@ -295,6 +296,9 @@ int main()
         SHLODBakerMeshDesc bakeMeshDescs; 
         std::vector<SHLODHighPolyMeshDesc> highPolyMeshs;
         CreateAndAddScene(bakeMeshDescs, highPolyMeshs);
+        SetHLODMesh(bakeMeshDescs);
+        SetHighPolyMesh(highPolyMeshs);
+        BakeHLODTexture();
         LodTexExampleDestroyScene();
         DeleteHLODBaker();
     }

@@ -95,8 +95,10 @@ void HLODRayTracingRayGen()
     float3 worldPosition = rtWorldPosition[rayIndex].xyz;
     float3 worldFaceNormal = rtWorldNormal[rayIndex].xyz;
 
-    if(all(worldPosition < 0.001f) && all(worldFaceNormal < 0.001f))
+    if(all(abs(worldPosition) < 0.001f) && all(abs(worldFaceNormal) < 0.001f))
     {
+        //outputBaseColor[rayIndex].rgba = float4(0,1,0,1);
+        //outputNormal[rayIndex].rgba = float4(0,0,1,1);
         return;
     }
 
@@ -134,10 +136,9 @@ void HLODRayTracingRayGen()
     }
     else
     {
-        outputBaseColor[rayIndex].rgba = float4(0,0,0,0);
-        outputNormal[rayIndex].rgba = float4(0,0,0,0);
+        //outputBaseColor[rayIndex].rgba = float4(0,1,0,1);
+        //outputNormal[rayIndex].rgba = float4(0,0,1,1);
     }
-
 }
 
 [shader("closesthit")]

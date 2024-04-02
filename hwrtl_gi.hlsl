@@ -1009,7 +1009,7 @@ void LightMapRayTracingRayGen()
     float3 worldFaceNormal = rtWorldNormal[rayIndex].xyz;
 
     bool bIsValidSample = true;
-    if(all(worldPosition < 0.001f) && all(worldFaceNormal < 0.001f))
+    if(all(abs(worldPosition) < 0.001f) && all(abs(worldFaceNormal) < 0.001f))
     {
         bIsValidSample = false;
         return;
